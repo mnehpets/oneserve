@@ -1,0 +1,291 @@
+// Package endpoint provides a type-safe abstraction for building HTTP handlers.
+//
+// The core pattern separates the request decoding, business logic, and response
+// rendering into distinct phases:
+//
+//  1. Unmarshal: The EndpointHandler decodes the request (path, query, body, etc.)
+//     into a typed parameters struct using struct tags.
+//  2. Endpoint: The EndpointFunc receives the decoded parameters and the request,
+//     executes business logic, and returns a Renderer. It does not write to the
+//     response directly.
+//  3. Render: The returned Renderer writes the status code, headers, and body
+//     to the http.ResponseWriter.
+//
+// Processors can be chained as middleware to intercept requests before they reach
+// the EndpointFunc.
+//
+// Supported Renderers:
+//   - JSONRenderer: Serializes a value as JSON.
+//   - StringRenderer: Writes a plain string.
+//   - TextTemplateRenderer: Renders a text/template.
+//   - HTMLTemplateRenderer: Renders an html/template.
+//   - StaticFileRenderer: Serves a single static file.
+//   - DirectoryHTMLRenderer: Renders a directory listing as HTML.
+//   - NoContentRenderer: Writes a status code with no body.
+package endpoint
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+)
+
+// EndpointError is a client-visible error that maps directly to an HTTP status code.
+//
+// The handler wrapper uses this to translate returned Go errors into HTTP
+// responses.
+type EndpointError struct {
+	Status int
+	// Message is a short, human-readable description suitable for an HTTP error body.
+	Message string
+	Cause   error
+}
+
+func (e *EndpointError) Error() string {
+	if e == nil {
+		return "endpoint: error: <nil>"
+	}
+	msg := e.Message
+	if msg == "" {
+		msg = http.StatusText(e.Status)
+		if msg == "" {
+			msg = "unknown error"
+		}
+	}
+	if e.Cause != nil {
+		return msg + ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+func (e *EndpointError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// Error creates a new EndpointError.
+func Error(status int, message string, err error) error {
+	return newEndpointError(status, message, err)
+}
+
+func newEndpointError(status int, message string, err error) error {
+	// Avoid double-wrapping.
+	var ee *EndpointError
+	if errors.As(err, &ee) {
+		return err
+	}
+	return &EndpointError{Status: status, Message: message, Cause: err}
+}
+
+// Renderers are values that write a response into an http.ResponseWriter.
+//
+// Protocol:
+//   - Renderers MUST call w.WriteHeader() to write the HTTP response status
+//     and headers. It must also call w.Write() to write response
+//   - Renderers may optionally write the Content-Type header before
+//     calling w.WriteHeader().
+//
+// Error handling:
+//   - If Render returns a non-nil error, it indicates a failure to write
+//     the response. The caller is responsible for handling that error
+//     (typically by writing an HTTP 500 response).
+type Renderer interface {
+	Render(w http.ResponseWriter, r *http.Request) error
+}
+
+// RendererFunc adapts a function to a Renderer.
+type RendererFunc func(w http.ResponseWriter, r *http.Request) error
+
+func (f RendererFunc) Render(w http.ResponseWriter, r *http.Request) error {
+	return f(w, r)
+}
+
+// Processor is middleware-style logic that runs before the Renderer.
+//
+// Protocol:
+//   - Processors MUST call next(...), unless they intend to
+//     short-circuit the request.
+//   - Processors MUST NOT call w.WriteHeader(...).
+//   - Processors MUST NOT write to the response body.
+//
+// Error handling:
+//   - If any processor returns a non-nil error, the chain stops immediately
+//     and that error is returned to the caller.
+type Processor interface {
+	Process(w http.ResponseWriter, r *http.Request, next func(w http.ResponseWriter, r *http.Request) error) error
+}
+
+// ProcessorFunc adapts a function to a Processor.
+type ProcessorFunc func(w http.ResponseWriter, r *http.Request, next func(w http.ResponseWriter, r *http.Request) error) error
+
+func (f ProcessorFunc) Process(w http.ResponseWriter, r *http.Request, next func(w http.ResponseWriter, r *http.Request) error) error {
+	return f(w, r, next)
+}
+
+// EndpointFunc is the wrapped handler function type.
+//
+// It receives the response writer, the incoming request, and a typed params
+// value (typically a struct populated from path/query/body/form data) and
+// returns a Renderer responsible for writing the response, or an error.
+//
+// EndpointFunc should implement business logic, without directly writing the
+// response body. It may modify the request context, and use the request, and the
+// params to determine the appropriate response to return, but the actual
+// body of the response, Status, and Content-Type header is delegated to
+// the returned Renderer.
+//
+// The returned Renderer should be concerned only with the content of the reponse;
+// it should not need to access the request or params. Typically, the Renderer should perform
+// formatting/serialization of data passed to it by the EndpointFunc.
+//
+// Parameter decoding is performed by the Handler wrapper.
+type EndpointFunc[P any] func(w http.ResponseWriter, r *http.Request, params P) (Renderer, error)
+
+// EndpointHandler is the standard http.Handler wrapper for an EndpointFunc.
+//
+// It runs zero or more processors. It then calls Endpoint with decoded
+// params and invokes the returned Renderer to write the response.
+//
+// The params type P may be any type, but is typically a struct type used to
+// hold decoded request parameters.
+type EndpointHandler[P any] struct {
+	Endpoint   EndpointFunc[P]
+	Processors []Processor
+}
+
+// Handler constructs an EndpointHandler.
+//
+// This helper exists to enable type inference for the params type P.
+func Handler[P any](fn EndpointFunc[P], processors ...Processor) *EndpointHandler[P] {
+	return &EndpointHandler[P]{
+		Endpoint:   fn,
+		Processors: processors,
+	}
+}
+
+type hooksKey struct{}
+
+// Defer registers a function to be called before the response headers are written.
+// The function fn must not call WriteHeader itself.
+//
+// WARNING: If the context does not contain a hooks registry (e.g. not running within
+// an EndpointHandler), this function is a silent no-op. This is a potential hazard
+// as middleware relying on Defer (like sessions) will fail to save state without error.
+func Defer(ctx context.Context, fn func(http.ResponseWriter)) {
+	hooks, ok := ctx.Value(hooksKey{}).(*[]func(http.ResponseWriter))
+	if ok && hooks != nil {
+		*hooks = append(*hooks, fn)
+	}
+}
+
+// Commit executes all deferred functions registered via Defer.
+// It should be called exactly once before writing headers.
+//
+// WARNING: If the context does not contain a hooks registry (e.g. not running within
+// an EndpointHandler), this function is a silent no-op. This is a potential hazard
+// as deferred operations will not run.
+func Commit(ctx context.Context, w http.ResponseWriter) {
+	hooks, ok := ctx.Value(hooksKey{}).(*[]func(http.ResponseWriter))
+	if ok && hooks != nil {
+		// Run in LIFO order
+		for i := len(*hooks) - 1; i >= 0; i-- {
+			(*hooks)[i](w)
+		}
+		// Clear hooks to prevent re-execution
+		*hooks = nil
+	}
+}
+
+// HandleFunc adapts an EndpointFunc into an http.HandlerFunc.
+//
+// This helper exists to enable type inference for the params type P.
+func HandleFunc[P any](fn EndpointFunc[P], processors ...Processor) http.HandlerFunc {
+	return Handler(fn, processors...).ServeHTTP
+}
+
+// ServeHTTP implements http.Handler.
+func (h *EndpointHandler[P]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.Endpoint == nil {
+		http.Error(w, "endpoint: nil EndpointFunc", http.StatusInternalServerError)
+		return
+	}
+
+	// Initialize hooks context if not present
+	if r.Context().Value(hooksKey{}) == nil {
+		var hooks []func(http.ResponseWriter)
+		ctx := context.WithValue(r.Context(), hooksKey{}, &hooks)
+		r = r.WithContext(ctx)
+	}
+
+	// Create a function to recursively call each processor in order, followed by the EndpointFunc.
+	var run func(i int, w2 http.ResponseWriter, r2 *http.Request) error
+	run = func(i int, w2 http.ResponseWriter, r2 *http.Request) error {
+		if i < 0 || i > len(h.Processors) {
+			// Sanity check failure.
+			return errors.New("endpoint: invalid processor index")
+		} else if i < len(h.Processors) {
+			if h.Processors[i] == nil {
+				return errors.New("endpoint: nil processor")
+			}
+			// Call the i'th processor followed by the next recursion of the "loop".
+			return h.Processors[i].Process(w2, r2, func(w3 http.ResponseWriter, r3 *http.Request) error {
+				return run(i+1, w3, r3)
+			})
+		}
+
+		// All processors have been called; now call EndpointFunc and render response.
+		// Populate params based on request (path, query, form)
+		// according to struct tags on params.
+		//
+		// P must be a struct type, or a pointer to a struct type.
+		// This is enforced by endpoint.Unmarshal (runtime) rather than by the type system.
+		var params P
+		if err := Unmarshal(r2, &params); err != nil {
+			return err
+		}
+		renderer, err := h.Endpoint(w2, r2, params)
+		if err != nil {
+			return err
+		}
+		if renderer == nil {
+			return errors.New("endpoint: nil renderer")
+		}
+
+		if c, ok := renderer.(io.Closer); ok {
+			defer c.Close()
+		}
+
+		Commit(r2.Context(), w2)
+		return renderer.Render(w2, r2)
+
+	}
+
+	// Start the processor chain.
+	err := run(0, w, r)
+
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := ""
+
+		var ee *EndpointError
+		// Check if the error already encodes a valid HTTP status.
+		if errors.As(err, &ee) && ee != nil {
+			if ee.Status >= 100 {
+				status = ee.Status
+			}
+			if ee.Message == "" {
+				message = http.StatusText(status)
+			} else {
+				message = ee.Message
+			}
+		} else {
+			message = err.Error()
+		}
+		Commit(r.Context(), w)
+		http.Error(w, message, status)
+		return
+	}
+}

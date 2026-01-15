@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>oneserve filesystem example</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
+      code { padding: 0.1rem 0.3rem; background: #f3f4f6; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>oneserve filesystem example</h1>
+    <p>
+      This is served from <code>example/filesystem/public/index.html</code> using <code>endpoint.FileSystem</code>.
+    </p>
+    <p>
+      Directory listings show the current directory path (relative to the served filesystem).
+    </p>
+    <p>
+      <a href="/">/</a><br />
+      <a href="/index.html">/index.html</a><br />
+      <a href="/subdir/">/subdir/</a> (index.html)<br />
+      <a href="/subdir">/subdir</a> (redirects to /subdir/)<br />
+      <a href="/subdir2">/subdir2</a> (redirects to /subdir2/)
+    </p>
+  </body>
+</html>
