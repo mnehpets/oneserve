@@ -1,6 +1,7 @@
 package endpoint
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	htmltmpl "html/template"
@@ -198,7 +199,11 @@ type FileSystemParams struct {
 //
 // SPA-style fallback routing is intentionally not implemented.
 type FileSystem struct {
-	FS fs.FS
+	// FS is a factory that returns the fs.FS to serve for the current request.
+	//
+	// This is invoked per-request so callers can construct an FS dynamically,
+	// e.g. using credentials carried on the request.
+	FS func(ctx context.Context, r *http.Request) (fs.FS, error)
 
 	// IndexHTML, if true, serves "index.html" when a directory is requested.
 	IndexHTML bool
@@ -213,11 +218,19 @@ type FileSystem struct {
 // Signature matches endpoint.EndpointFunc so callers can do:
 // mux.HandleFunc("/blah/{path...}", endpoint.Handler(fs.Endpoint))
 func (f *FileSystem) Endpoint(w http.ResponseWriter, r *http.Request, params FileSystemParams) (Renderer, error) {
+	if r == nil {
+		return nil, Error(http.StatusInternalServerError, "internal server error", errors.New("endpoint: filesystem: nil request"))
+	}
 	if f == nil || f.FS == nil {
 		return nil, Error(http.StatusInternalServerError, "filesystem: nil FS", errors.New("endpoint: filesystem: nil FS"))
 	}
-	if r == nil {
-		return nil, Error(http.StatusInternalServerError, "internal server error", errors.New("endpoint: filesystem: nil request"))
+
+	fsys, err := f.FS(r.Context(), r)
+	if err != nil {
+		return nil, Error(http.StatusInternalServerError, "failed to resolve filesystem", err)
+	}
+	if fsys == nil {
+		return nil, Error(http.StatusInternalServerError, "filesystem: nil FS", errors.New("endpoint: filesystem: FS factory returned nil"))
 	}
 
 	// Sanitize and normalize into an fs.FS path.
@@ -231,7 +244,7 @@ func (f *FileSystem) Endpoint(w http.ResponseWriter, r *http.Request, params Fil
 		p = strings.TrimPrefix(p, "/")
 	}
 
-	file, err := f.FS.Open(p)
+	file, err := fsys.Open(p)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, Error(http.StatusNotFound, "not found", err)
@@ -267,7 +280,7 @@ func (f *FileSystem) Endpoint(w http.ResponseWriter, r *http.Request, params Fil
 		// Optionally serve index.html for directories.
 		if f.IndexHTML {
 			indexPath := path.Join(p, "index.html")
-			if indexFile, err := f.FS.Open(indexPath); err == nil {
+			if indexFile, err := fsys.Open(indexPath); err == nil {
 				_ = file.Close()
 				return &StaticFileRenderer{File: indexFile}, nil
 			}

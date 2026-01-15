@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io/fs"
 	"log"
 	"net/http"
@@ -14,7 +15,9 @@ func main() {
 	root := os.DirFS("public")
 
 	fsEndpoint := &endpoint.FileSystem{
-		FS:               root,
+		FS: func(ctx context.Context, r *http.Request) (fs.FS, error) {
+			return root, nil
+		},
 		IndexHTML:        true,
 		DirectoryListing: true,
 	}

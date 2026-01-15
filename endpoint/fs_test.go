@@ -1,6 +1,7 @@
 package endpoint
 
 import (
+	"context"
 	"errors"
 	htmltmpl "html/template"
 	"io/fs"
@@ -201,8 +202,10 @@ func TestDirectoryHTMLRenderer_EmptyDirectory(t *testing.T) {
 
 func TestFileSystemEndpoint_ServesFile(t *testing.T) {
 	f := &FileSystem{
-		FS: fstest.MapFS{
-			"hello.txt": &fstest.MapFile{Data: []byte("hello")},
+		FS: func(_ context.Context, _ *http.Request) (fs.FS, error) {
+			return fstest.MapFS{
+				"hello.txt": &fstest.MapFile{Data: []byte("hello")},
+			}, nil
 		},
 	}
 
@@ -228,8 +231,10 @@ func TestFileSystemEndpoint_ServesFile(t *testing.T) {
 
 func TestFileSystemEndpoint_DirectoryRedirectsWithoutSlash(t *testing.T) {
 	f := &FileSystem{
-		FS: fstest.MapFS{
-			"dir/index.html": &fstest.MapFile{Data: []byte("INDEX")},
+		FS: func(_ context.Context, _ *http.Request) (fs.FS, error) {
+			return fstest.MapFS{
+				"dir/index.html": &fstest.MapFile{Data: []byte("INDEX")},
+			}, nil
 		},
 		IndexHTML: true,
 	}
@@ -253,8 +258,10 @@ func TestFileSystemEndpoint_DirectoryRedirectsWithoutSlash(t *testing.T) {
 
 func TestFileSystemEndpoint_DirectoryServesIndexHTML(t *testing.T) {
 	f := &FileSystem{
-		FS: fstest.MapFS{
-			"dir/index.html": &fstest.MapFile{Data: []byte("INDEX")},
+		FS: func(_ context.Context, _ *http.Request) (fs.FS, error) {
+			return fstest.MapFS{
+				"dir/index.html": &fstest.MapFile{Data: []byte("INDEX")},
+			}, nil
 		},
 		IndexHTML: true,
 	}
@@ -277,8 +284,10 @@ func TestFileSystemEndpoint_DirectoryServesIndexHTML(t *testing.T) {
 
 func TestFileSystemEndpoint_DirectoryRedirects_WhenMountedUnderPrefix(t *testing.T) {
 	f := &FileSystem{
-		FS: fstest.MapFS{
-			"dira/dirb/index.html": &fstest.MapFile{Data: []byte("INDEX")},
+		FS: func(_ context.Context, _ *http.Request) (fs.FS, error) {
+			return fstest.MapFS{
+				"dira/dirb/index.html": &fstest.MapFile{Data: []byte("INDEX")},
+			}, nil
 		},
 		IndexHTML: true,
 	}
@@ -302,9 +311,11 @@ func TestFileSystemEndpoint_DirectoryRedirects_WhenMountedUnderPrefix(t *testing
 
 func TestFileSystemEndpoint_DirectoryListing(t *testing.T) {
 	f := &FileSystem{
-		FS: fstest.MapFS{
-			"dir/a.txt": &fstest.MapFile{Data: []byte("A")},
-			"dir/b.txt": &fstest.MapFile{Data: []byte("B")},
+		FS: func(_ context.Context, _ *http.Request) (fs.FS, error) {
+			return fstest.MapFS{
+				"dir/a.txt": &fstest.MapFile{Data: []byte("A")},
+				"dir/b.txt": &fstest.MapFile{Data: []byte("B")},
+			}, nil
 		},
 		DirectoryListing: true,
 	}
@@ -336,8 +347,10 @@ func TestFileSystemEndpoint_DirectoryListing(t *testing.T) {
 
 func TestFileSystemEndpoint_DirectoryWithoutIndexOrListingIs404(t *testing.T) {
 	f := &FileSystem{
-		FS: fstest.MapFS{
-			"dir/a.txt": &fstest.MapFile{Data: []byte("A")},
+		FS: func(_ context.Context, _ *http.Request) (fs.FS, error) {
+			return fstest.MapFS{
+				"dir/a.txt": &fstest.MapFile{Data: []byte("A")},
+			}, nil
 		},
 		IndexHTML:        false,
 		DirectoryListing: false,
@@ -361,8 +374,10 @@ func TestFileSystemEndpoint_DirectoryWithoutIndexOrListingIs404(t *testing.T) {
 
 func TestFileSystemEndpoint_PathTraversalIsNotFound(t *testing.T) {
 	f := &FileSystem{
-		FS: fstest.MapFS{
-			"index.html": &fstest.MapFile{Data: []byte("ROOT")},
+		FS: func(_ context.Context, _ *http.Request) (fs.FS, error) {
+			return fstest.MapFS{
+				"index.html": &fstest.MapFile{Data: []byte("ROOT")},
+			}, nil
 		},
 		IndexHTML: false,
 	}
