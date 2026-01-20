@@ -20,10 +20,15 @@ import (
 // PreAuthHook is an optional hook invoked before the flow starts.
 type PreAuthHook func(ctx context.Context, w http.ResponseWriter, r *http.Request, providerID string, params AuthParams) (AuthParams, error)
 
+// maxAppDataBytes is the maximum allowed size of AppData after base64url decoding.
+const maxAppDataBytes = 512
+
 // AuthParams contains parameters for initiating an OAuth flow.
 // It is used for both LoginParams and AuthState to ensure consistency.
 type AuthParams struct {
 	NextURL string `query:"next_url" cbor:"1,keyasint,omitempty"`
+	// AppData is base64url-encoded in query params and limited to 512 bytes when decoded.
+	// maxLength of 683 corresponds to the base64url-encoded length of 512 bytes (512 * 4/3 ≈ 683).
 	AppData []byte `query:"app_data,base64url" cbor:"2,keyasint,omitempty" maxLength:"683"`
 }
 
@@ -159,8 +164,8 @@ func NewHandler(registry *Registry, cookie middleware.SecureCookie[AuthStateMap]
 		}
 
 		// Check AppData length (decoded)
-		if len(params.AuthParams.AppData) > 512 {
-			return h.failure(w, r, endpoint.Error(http.StatusBadRequest, "app_data exceeds maximum length of 512 bytes", nil))
+		if len(params.AuthParams.AppData) > maxAppDataBytes {
+			return h.failure(w, r, endpoint.Error(http.StatusBadRequest, fmt.Sprintf("app_data exceeds maximum length of %d bytes", maxAppDataBytes), nil))
 		}
 
 		// 2. Prepare State
