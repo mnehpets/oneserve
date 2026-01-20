@@ -43,6 +43,7 @@ var defaultFieldLimit int = 16 * 1024 // 16KB
 //   - `header:"name[,flag[,flag...]]"`
 //   - `cookie:"name[,flag[,flag...]]"`
 //   - `path:"-"` to ignore the field entirely
+//   - `maxLength:"n"` to set the maximum byte length for a field value
 //
 // Where:
 //   - name: parameter name; if empty, defaults to the struct field name lowercased
@@ -55,6 +56,14 @@ var defaultFieldLimit int = 16 * 1024 // 16KB
 //     different []byte decoding flags per source.
 //   - If multiple source tags are present on the same field, precedence is: path, query, form, body, cookie.
 //   - If no data is present for a field, it is left unchanged (zero-value by default).
+//
+// Length constraints:
+//   - Individual fields: use `maxLength:"n"` to set a maximum byte length for the field value.
+//     If the incoming value exceeds this limit, Unmarshal returns a 400 Bad Request error.
+//     If `maxLength` is absent, a default limit of 16KB (16384 bytes) is enforced.
+//     Use `maxLength:"0"` or `maxLength:""` for no limit.
+//   - Multipart form parsing: use `maxLength:"n"` on a root-level `_` field (e.g., `_ struct{} \`maxLength:"64"\``)
+//     to set the maximum memory (in bytes) for ParseMultipartForm. If absent, defaults to 32MB.
 func Unmarshal(r *http.Request, dst any) error {
 	if r == nil {
 		return newEndpointError(http.StatusInternalServerError, "", errors.New("endpoint: decode: nil request"))
