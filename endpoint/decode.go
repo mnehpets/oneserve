@@ -62,8 +62,8 @@ var defaultFieldLimit int = 16 * 1024 // 16KB
 //     If the incoming value exceeds this limit, Unmarshal returns a 400 Bad Request error.
 //     If `maxLength` is absent, a default limit of 16KB (16384 bytes) is enforced.
 //     Use `maxLength:"0"` or `maxLength:""` for no limit.
-//   - Multipart form parsing: use `maxLength:"n"` on a root-level `_` field (e.g., `_ struct{} \`maxLength:"64"\``)
-//     to set the maximum memory (in bytes) for ParseMultipartForm. If absent, defaults to 32MB.
+//   - Multipart form parsing: use `maxLength:"n"` on a root-level `_` field to set the
+//     maximum memory (in bytes) for ParseMultipartForm. If absent, defaults to 32MB.
 func Unmarshal(r *http.Request, dst any) error {
 	if r == nil {
 		return newEndpointError(http.StatusInternalServerError, "", errors.New("endpoint: decode: nil request"))
