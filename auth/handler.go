@@ -24,7 +24,7 @@ type PreAuthHook func(ctx context.Context, w http.ResponseWriter, r *http.Reques
 // It is used for both LoginParams and AuthState to ensure consistency.
 type AuthParams struct {
 	NextURL string `query:"next_url" cbor:"1,keyasint,omitempty"`
-	AppData []byte `query:"app_data,base64url" cbor:"2,keyasint,omitempty" maxLength:"700"`
+	AppData []byte `query:"app_data,base64url" cbor:"2,keyasint,omitempty" maxLength:"683"`
 }
 
 type SuccessParams struct {
