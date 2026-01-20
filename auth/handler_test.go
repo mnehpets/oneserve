@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -55,7 +56,9 @@ func TestAuthHandler_Login(t *testing.T) {
 
 	// 1. Test Login Redirect
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/auth/login/test-provider?next=/dashboard&app_data=123", nil)
+	// Base64url encode app_data since it's now expected to be base64url encoded
+	appDataValue := base64.RawURLEncoding.EncodeToString([]byte("123"))
+	r := httptest.NewRequest("GET", "/auth/login/test-provider?next=/dashboard&app_data="+appDataValue, nil)
 	h.ServeHTTP(w, r)
 
 	resp := w.Result()
@@ -89,8 +92,8 @@ func TestAuthHandler_Login(t *testing.T) {
 		if params.ProviderID != "test-provider" {
 			t.Errorf("expected provider test-provider, got %s", params.ProviderID)
 		}
-		if params.AppData != "123" {
-			t.Errorf("expected app_data 123, got %s", params.AppData)
+		if string(params.AppData) != "123" {
+			t.Errorf("expected app_data 123, got %s", string(params.AppData))
 		}
 		if params.Token.AccessToken != "mock_access_token" {
 			t.Errorf("expected access token mock_access_token, got %s", params.Token.AccessToken)
@@ -475,7 +478,7 @@ func TestAuthHandler_AppDataPersistence(t *testing.T) {
 
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{TokenURL: srv.URL}})
 
-	var capturedAppData string
+	var capturedAppData []byte
 	h := NewHandler(reg, cookie, "http://example.com", "/auth", WithSuccessEndpoint(func(w http.ResponseWriter, r *http.Request, params *SuccessParams) (endpoint.Renderer, error) {
 		capturedAppData = params.AppData
 		return &endpoint.RedirectRenderer{URL: "/"}, nil
@@ -486,9 +489,9 @@ func TestAuthHandler_AppDataPersistence(t *testing.T) {
 
 	// 1. Login
 	w := httptest.NewRecorder()
-	// URL encode the app_data in the query
+	// Base64url encode the app_data in the query since it's now expected to be base64url encoded
 	u := url.Values{}
-	u.Set("app_data", complexData)
+	u.Set("app_data", base64.RawURLEncoding.EncodeToString([]byte(complexData)))
 	r := httptest.NewRequest("GET", "/auth/login/test?"+u.Encode(), nil)
 	h.ServeHTTP(w, r)
 
@@ -504,8 +507,8 @@ func TestAuthHandler_AppDataPersistence(t *testing.T) {
 	r2.AddCookie(c)
 	h.ServeHTTP(w2, r2)
 
-	if capturedAppData != complexData {
-		t.Errorf("AppData mismatch.\nExpected: %q\nGot:      %q", complexData, capturedAppData)
+	if string(capturedAppData) != complexData {
+		t.Errorf("AppData mismatch.\nExpected: %q\nGot:      %q", complexData, string(capturedAppData))
 	}
 }
 
@@ -532,3 +535,35 @@ func TestAuthHandler_PKCE_Disabled(t *testing.T) {
 		t.Error("expected no code_challenge when PKCE is disabled")
 	}
 }
+
+func TestAuthHandler_AppDataMaxLength(t *testing.T) {
+	keys := map[string][]byte{"1": make([]byte, 32)}
+	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
+	reg := NewRegistry()
+	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{AuthURL: "http://provider/auth"}})
+
+	h := NewHandler(reg, cookie, "http://example.com", "/auth")
+
+	// Create app_data that's longer than 512 bytes when decoded
+	// We need to base64url encode it for the query param
+	longData := make([]byte, 513)
+	for i := range longData {
+		longData[i] = byte('A')
+	}
+	// The endpoint decoder will base64url decode this, so we need to encode it first
+	encodedData := base64.RawURLEncoding.EncodeToString(longData)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/auth/login/test?app_data="+encodedData, nil)
+	h.ServeHTTP(w, r)
+
+	// Should fail because decoded length exceeds 512 bytes
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for app_data exceeding max length, got %d", w.Result().StatusCode)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "app_data exceeds maximum length") {
+		t.Errorf("expected 'app_data exceeds maximum length' error, got %s", body)
+	}
+}
+
