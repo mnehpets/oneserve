@@ -24,14 +24,14 @@ type PreAuthHook func(ctx context.Context, w http.ResponseWriter, r *http.Reques
 // It is used for both LoginParams and AuthState to ensure consistency.
 type AuthParams struct {
 	NextURL string `query:"next_url" cbor:"1,keyasint,omitempty"`
-	AppData string `query:"app_data" cbor:"2,keyasint,omitempty"`
+	AppData []byte `query:"app_data,base64url" cbor:"2,keyasint,omitempty" maxLength:"700"`
 }
 
 type SuccessParams struct {
 	ProviderID string
 	Token      *oauth2.Token
 	IDToken    *oidc.IDToken
-	AppData    string
+	AppData    []byte
 	NextURL    string
 }
 
@@ -156,6 +156,11 @@ func NewHandler(registry *Registry, cookie middleware.SecureCookie[AuthStateMap]
 		params.AuthParams, err = h.preAuth(ctx, w, r, providerID, params.AuthParams)
 		if err != nil {
 			return h.failure(w, r, endpoint.Error(http.StatusBadRequest, "pre-auth failed", err))
+		}
+
+		// Check AppData length (decoded)
+		if len(params.AuthParams.AppData) > 512 {
+			return h.failure(w, r, endpoint.Error(http.StatusBadRequest, "app_data exceeds maximum length of 512 bytes", nil))
 		}
 
 		// 2. Prepare State
