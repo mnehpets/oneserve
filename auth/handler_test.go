@@ -544,26 +544,37 @@ func TestAuthHandler_AppDataMaxLength(t *testing.T) {
 
 	h := NewHandler(reg, cookie, "http://example.com", "/auth")
 
-	// Create app_data that's longer than 512 bytes when decoded
-	// We need to base64url encode it for the query param
+	// Test with exactly 512 bytes - should pass
+	okData := make([]byte, 512)
+	for i := range okData {
+		okData[i] = 'A'
+	}
+	okEncoded := base64.RawURLEncoding.EncodeToString(okData)
+
+	w1 := httptest.NewRecorder()
+	r1 := httptest.NewRequest("GET", "/auth/login/test?app_data="+okEncoded, nil)
+	h.ServeHTTP(w1, r1)
+
+	if w1.Result().StatusCode != http.StatusFound {
+		t.Errorf("expected 302 for 512 bytes, got %d: %s", w1.Result().StatusCode, w1.Body.String())
+	}
+
+	// Test with 513 bytes - should fail due to exceeding 512-byte limit
+	// Note: 513 bytes encodes to 684 chars, which exceeds maxLength of 683
+	// So this will fail at the decoder level with a generic "Bad Request" error
 	longData := make([]byte, 513)
 	for i := range longData {
-		longData[i] = byte('A')
+		longData[i] = 'A'
 	}
-	// The endpoint decoder will base64url decode this, so we need to encode it first
-	encodedData := base64.RawURLEncoding.EncodeToString(longData)
+	longEncoded := base64.RawURLEncoding.EncodeToString(longData)
 
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/auth/login/test?app_data="+encodedData, nil)
-	h.ServeHTTP(w, r)
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest("GET", "/auth/login/test?app_data="+longEncoded, nil)
+	h.ServeHTTP(w2, r2)
 
-	// Should fail because decoded length exceeds 512 bytes
-	if w.Result().StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400 for app_data exceeding max length, got %d", w.Result().StatusCode)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "app_data exceeds maximum length") {
-		t.Errorf("expected 'app_data exceeds maximum length' error, got %s", body)
+	// Should fail because it exceeds 512 bytes (fails at decoder or handler level)
+	if w2.Result().StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for 513 bytes, got %d", w2.Result().StatusCode)
 	}
 }
 
