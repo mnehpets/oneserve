@@ -25,30 +25,30 @@ func main() {
 
 	// Create security headers processor with CORS enabled for cross-origin access
 	// We start with API defaults and add CORS configuration.
-	corsSecurity := middleware.NewAPISecurityHeadersProcessor().WithCORS(&middleware.CORSConfig{
+	corsSecurity := middleware.NewAPISecurityHeadersProcessor(middleware.WithCORS(&middleware.CORSConfig{
 		AllowedOrigins:   []string{"https://example.com", "https://app.example.com"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Content-Type", "Authorization"},
 		ExposedHeaders:   []string{"X-Request-ID"},
 		AllowCredentials: true,
 		MaxAge:           3600,
-	})
+	}))
 
 	// Create a custom security configuration starting from Web defaults
 	// (Allows same-origin scripts/styles, stricter referrer policy than API)
-	customWebSecurity := middleware.NewSecurityHeadersProcessor().
-		WithHSTS(7776000, true, false). // 90 days, with subdomains, no preload
-		WithReferrerPolicy("same-origin").
-		WithFrameOptions("SAMEORIGIN").
-		WithCSP("default-src 'self'; img-src https:; script-src 'self' https://trusted.cdn.com")
+	customWebSecurity := middleware.NewSecurityHeadersProcessor(
+		middleware.WithHSTS(7776000, true, false), // 90 days, with subdomains, no preload
+		middleware.WithReferrerPolicy("same-origin"),
+		middleware.WithFrameOptions("SAMEORIGIN"),
+		middleware.WithCSP("default-src 'self'; img-src https:; script-src 'self' https://trusted.cdn.com"))
 
 	// Create a wildcard CORS configuration for public APIs
-	publicCORS := middleware.NewAPISecurityHeadersProcessor().WithCORS(&middleware.CORSConfig{
+	publicCORS := middleware.NewAPISecurityHeadersProcessor(middleware.WithCORS(&middleware.CORSConfig{
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"GET", "OPTIONS"},
 		AllowedHeaders: []string{"Content-Type"},
 		MaxAge:         3600,
-	})
+	}))
 
 	mux := http.NewServeMux()
 
