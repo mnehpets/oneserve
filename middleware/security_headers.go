@@ -205,6 +205,8 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request, config *CORSConfig) 
 	}
 
 	// CORS headers should only be set when there's an actual cross-origin request
+	// (Origin header present, per CORS spec). Without an Origin header, this is not
+	// a cross-origin request and CORS headers are not needed.
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return
@@ -215,7 +217,9 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request, config *CORSConfig) 
 		// Check if origin is allowed
 		for _, allowed := range config.AllowedOrigins {
 			if allowed == "*" {
-				// Security: Never set wildcard origin with credentials
+				// Security: Never set wildcard origin with credentials - this would
+				// expose credentials to all origins, violating the CORS security model.
+				// The CORS spec explicitly forbids '*' with credentials.
 				if config.AllowCredentials {
 					// Skip wildcard when credentials are enabled
 					continue

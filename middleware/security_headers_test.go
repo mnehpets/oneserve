@@ -312,7 +312,8 @@ func TestSecurityHeadersProcessor_CORS_NoOriginHeader(t *testing.T) {
 	})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
-	// No Origin header set
+	// Test case with no Origin header to verify CORS headers are not set when
+	// there is no cross-origin request (per CORS spec).
 
 	next := func(w http.ResponseWriter, r *http.Request) error {
 		return nil
