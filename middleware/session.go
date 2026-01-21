@@ -149,7 +149,7 @@ func (s *session[Raw]) Expires() time.Time {
 
 func (s *session[Raw]) Get(key string, dest any) error {
 	if s == nil || s.sessionData == nil {
-		return errors.New("session not initialized")
+		return errors.New("user not logged in")
 	}
 	raw, ok := s.sessionData.KV[key]
 	if !ok {
@@ -170,7 +170,7 @@ func (s *session[Raw]) Set(key string, value any) error {
 		// If we are setting data on a nil sessionData (e.g. no cookie yet), we should init it.
 		// But newSessionData needs to be called.
 		// For now, let's assume we can't set on a nil session (should have been created by middleware).
-		return errors.New("session not initialized")
+		return errors.New("user not logged in")
 	}
 	if s.marshal == nil {
 		return errors.New("no value encoder configured")
