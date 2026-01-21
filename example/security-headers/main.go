@@ -8,46 +8,42 @@ import (
 	"github.com/mnehpets/oneserve/middleware"
 )
 
-// APIParams defines the parameters for API endpoints.
-type APIParams struct{}
-
 // PublicAPIEndpoint is a simple API endpoint that returns JSON.
-func PublicAPIEndpoint(w http.ResponseWriter, r *http.Request, params APIParams) (endpoint.Renderer, error) {
-	// Handle preflight requests
-	if r.Method == "OPTIONS" {
-		return &endpoint.NoContentRenderer{Status: http.StatusNoContent}, nil
-	}
-
+func PublicAPIEndpoint(w http.ResponseWriter, r *http.Request, params struct{}) (endpoint.Renderer, error) {
 	return &endpoint.JSONRenderer{
 		Value: map[string]string{
 			"message": "Hello from secure API!",
-			"status":  "ok",
+			"status":  "somewhat chill",
 		},
 	}, nil
 }
 
 func main() {
-	// Create security headers processor with default settings
-	defaultSecurity := middleware.NewSecurityHeadersProcessor()
+	// Create security headers processor with defaults optimized for APIs
+	// (Strict CSP, no referrer, etc.)
+	apiSecurity := middleware.NewAPISecurityHeadersProcessor()
 
 	// Create security headers processor with CORS enabled for cross-origin access
-	corsSecurity := middleware.NewSecurityHeadersProcessor().WithCORS(&middleware.CORSConfig{
-		AllowedOrigins: []string{"https://example.com", "https://app.example.com"},
-		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization"},
-		ExposedHeaders: []string{"X-Request-ID"},
+	// We start with API defaults and add CORS configuration.
+	corsSecurity := middleware.NewAPISecurityHeadersProcessor().WithCORS(&middleware.CORSConfig{
+		AllowedOrigins:   []string{"https://example.com", "https://app.example.com"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Content-Type", "Authorization"},
+		ExposedHeaders:   []string{"X-Request-ID"},
 		AllowCredentials: true,
-		MaxAge:         3600,
+		MaxAge:           3600,
 	})
 
-	// Create a custom security configuration
-	customSecurity := middleware.NewSecurityHeadersProcessor().
+	// Create a custom security configuration starting from Web defaults
+	// (Allows same-origin scripts/styles, stricter referrer policy than API)
+	customWebSecurity := middleware.NewSecurityHeadersProcessor().
 		WithHSTS(7776000, true, false). // 90 days, with subdomains, no preload
 		WithReferrerPolicy("same-origin").
-		WithFrameOptions("SAMEORIGIN")
+		WithFrameOptions("SAMEORIGIN").
+		WithCSP("default-src 'self'; img-src https:; script-src 'self' https://trusted.cdn.com")
 
 	// Create a wildcard CORS configuration for public APIs
-	publicCORS := middleware.NewSecurityHeadersProcessor().WithCORS(&middleware.CORSConfig{
+	publicCORS := middleware.NewAPISecurityHeadersProcessor().WithCORS(&middleware.CORSConfig{
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"GET", "OPTIONS"},
 		AllowedHeaders: []string{"Content-Type"},
@@ -56,15 +52,16 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Endpoint with default security headers
-	mux.HandleFunc("GET /api/secure", endpoint.HandleFunc(PublicAPIEndpoint, defaultSecurity))
+	// Endpoint with default API security headers
+	mux.HandleFunc("GET /api/secure", endpoint.HandleFunc(PublicAPIEndpoint, apiSecurity))
 
 	// Endpoint with CORS for specific origins (with preflight support)
+	// Note: We still register OPTIONS to route the request, but the middleware handles the response.
 	mux.HandleFunc("GET /api/cors", endpoint.HandleFunc(PublicAPIEndpoint, corsSecurity))
 	mux.HandleFunc("OPTIONS /api/cors", endpoint.HandleFunc(PublicAPIEndpoint, corsSecurity))
 
-	// Endpoint with custom security settings
-	mux.HandleFunc("GET /api/custom", endpoint.HandleFunc(PublicAPIEndpoint, customSecurity))
+	// Endpoint with custom security settings (simulating a web page/asset)
+	mux.HandleFunc("GET /content/custom", endpoint.HandleFunc(PublicAPIEndpoint, customWebSecurity))
 
 	// Public endpoint with wildcard CORS (with preflight support)
 	mux.HandleFunc("GET /api/public", endpoint.HandleFunc(PublicAPIEndpoint, publicCORS))
@@ -72,10 +69,10 @@ func main() {
 
 	log.Println("Server starting on :8080")
 	log.Println("Try these endpoints:")
-	log.Println("  - http://localhost:8080/api/secure  (default security headers)")
-	log.Println("  - http://localhost:8080/api/cors    (CORS enabled for specific origins)")
-	log.Println("  - http://localhost:8080/api/custom  (custom HSTS and frame options)")
-	log.Println("  - http://localhost:8080/api/public  (public API with wildcard CORS)")
+	log.Println("  - http://localhost:8080/api/secure      (API security defaults)")
+	log.Println("  - http://localhost:8080/api/cors        (CORS enabled for specific origins)")
+	log.Println("  - http://localhost:8080/content/custom  (Custom Web security: HSTS, CSP)")
+	log.Println("  - http://localhost:8080/api/public      (Public API with wildcard CORS)")
 
 	if err := http.ListenAndServe(":8080", mux); err != nil {
 		log.Fatal(err)
