@@ -52,10 +52,9 @@ type Session interface {
 	Username() (string, bool)
 	// Login authenticates the user with the given username.
 	// This creates a new session with a fresh session ID and clears any existing session data.
-	// Returns an error if the session is nil.
+	// Returns an error if session creation fails (e.g., insufficient randomness for session ID).
 	Login(username string) error
 	// Logout clears the session data and logs out the user.
-	// Returns an error if the session is nil.
 	Logout() error
 	// Expires returns the expiration time of the session.
 	// Returns the zero time if the session is not initialized.
