@@ -10,13 +10,19 @@ import (
 
 // SecurityHeadersProcessor is a middleware that sets recommended security headers.
 //
-// Default configuration provides secure defaults:
+// Default configuration for NewSecurityHeadersProcessor (web content):
 //   - HSTS: max-age=31536000; includeSubDomains (1 year, with subdomains)
 //   - Referrer-Policy: strict-origin-when-cross-origin
 //   - X-Frame-Options: DENY
 //   - X-Content-Type-Options: nosniff
+//   - Content-Security-Policy: default-src 'self'; ... (and other defaults)
+//   - Cross-Origin Policies: COOP=same-origin, COEP=require-corp, CORP=same-origin
+//
+// Default configuration for NewAPISecurityHeadersProcessor (APIs):
+//   - Similar to above but with stricter CSP (default-src 'none') and no-referrer.
 //
 // For cross-origin scenarios, configure CORS options via CORSConfig.
+// This middleware automatically handles CORS preflight (OPTIONS) requests.
 type SecurityHeadersProcessor struct {
 	// HSTS configures the Strict-Transport-Security header.
 	// Set to nil to disable. Default: max-age=31536000; includeSubDomains
