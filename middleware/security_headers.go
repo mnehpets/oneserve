@@ -108,9 +108,12 @@ type CORSConfig struct {
 	MaxAge int
 }
 
+// SecurityHeadersOption is a functional option for configuring SecurityHeadersProcessor.
+type SecurityHeadersOption func(*SecurityHeadersProcessor)
+
 // NewSecurityHeadersProcessor creates a SecurityHeadersProcessor with recommended defaults for web content.
-func NewSecurityHeadersProcessor() *SecurityHeadersProcessor {
-	return &SecurityHeadersProcessor{
+func NewSecurityHeadersProcessor(opts ...SecurityHeadersOption) *SecurityHeadersProcessor {
+	p := &SecurityHeadersProcessor{
 		HSTS: &HSTSConfig{
 			MaxAge:            31536000, // 1 year
 			IncludeSubDomains: true,
@@ -125,11 +128,17 @@ func NewSecurityHeadersProcessor() *SecurityHeadersProcessor {
 		CrossOriginResourcePolicy: "same-origin",
 		CORS:                      nil, // No CORS by default
 	}
+
+	for _, opt := range opts {
+		opt(p)
+	}
+
+	return p
 }
 
 // NewAPISecurityHeadersProcessor creates a SecurityHeadersProcessor with defaults for APIs.
-func NewAPISecurityHeadersProcessor() *SecurityHeadersProcessor {
-	return &SecurityHeadersProcessor{
+func NewAPISecurityHeadersProcessor(opts ...SecurityHeadersOption) *SecurityHeadersProcessor {
+	p := &SecurityHeadersProcessor{
 		HSTS: &HSTSConfig{
 			MaxAge:            31536000, // 1 year
 			IncludeSubDomains: true,
@@ -144,64 +153,78 @@ func NewAPISecurityHeadersProcessor() *SecurityHeadersProcessor {
 		CrossOriginResourcePolicy: "same-origin",
 		CORS:                      nil,
 	}
+
+	for _, opt := range opts {
+		opt(p)
+	}
+
+	return p
 }
 
 // WithHSTS configures HSTS settings.
-func (p *SecurityHeadersProcessor) WithHSTS(maxAge int, includeSubDomains, preload bool) *SecurityHeadersProcessor {
-	p.HSTS = &HSTSConfig{
-		MaxAge:            maxAge,
-		IncludeSubDomains: includeSubDomains,
-		Preload:           preload,
+func WithHSTS(maxAge int, includeSubDomains, preload bool) SecurityHeadersOption {
+	return func(p *SecurityHeadersProcessor) {
+		p.HSTS = &HSTSConfig{
+			MaxAge:            maxAge,
+			IncludeSubDomains: includeSubDomains,
+			Preload:           preload,
+		}
 	}
-	return p
 }
 
 // WithoutHSTS disables HSTS headers.
-func (p *SecurityHeadersProcessor) WithoutHSTS() *SecurityHeadersProcessor {
-	p.HSTS = nil
-	return p
+func WithoutHSTS() SecurityHeadersOption {
+	return func(p *SecurityHeadersProcessor) {
+		p.HSTS = nil
+	}
 }
 
 // WithReferrerPolicy sets the Referrer-Policy header.
 // Common values: no-referrer, no-referrer-when-downgrade, origin,
 // origin-when-cross-origin, same-origin, strict-origin,
 // strict-origin-when-cross-origin, unsafe-url
-func (p *SecurityHeadersProcessor) WithReferrerPolicy(policy string) *SecurityHeadersProcessor {
-	p.ReferrerPolicy = policy
-	return p
+func WithReferrerPolicy(policy string) SecurityHeadersOption {
+	return func(p *SecurityHeadersProcessor) {
+		p.ReferrerPolicy = policy
+	}
 }
 
 // WithFrameOptions sets the X-Frame-Options header.
 // Common values: DENY, SAMEORIGIN
-func (p *SecurityHeadersProcessor) WithFrameOptions(options string) *SecurityHeadersProcessor {
-	p.FrameOptions = options
-	return p
+func WithFrameOptions(options string) SecurityHeadersOption {
+	return func(p *SecurityHeadersProcessor) {
+		p.FrameOptions = options
+	}
 }
 
 // WithContentTypeOptions enables or disables X-Content-Type-Options: nosniff.
-func (p *SecurityHeadersProcessor) WithContentTypeOptions(enabled bool) *SecurityHeadersProcessor {
-	p.ContentTypeOptions = enabled
-	return p
+func WithContentTypeOptions(enabled bool) SecurityHeadersOption {
+	return func(p *SecurityHeadersProcessor) {
+		p.ContentTypeOptions = enabled
+	}
 }
 
 // WithCSP sets the Content-Security-Policy header.
-func (p *SecurityHeadersProcessor) WithCSP(policy string) *SecurityHeadersProcessor {
-	p.ContentSecurityPolicy = policy
-	return p
+func WithCSP(policy string) SecurityHeadersOption {
+	return func(p *SecurityHeadersProcessor) {
+		p.ContentSecurityPolicy = policy
+	}
 }
 
 // WithCrossOriginPolicies sets COOP, COEP, and CORP headers.
-func (p *SecurityHeadersProcessor) WithCrossOriginPolicies(opener, embedder, resource string) *SecurityHeadersProcessor {
-	p.CrossOriginOpenerPolicy = opener
-	p.CrossOriginEmbedderPolicy = embedder
-	p.CrossOriginResourcePolicy = resource
-	return p
+func WithCrossOriginPolicies(opener, embedder, resource string) SecurityHeadersOption {
+	return func(p *SecurityHeadersProcessor) {
+		p.CrossOriginOpenerPolicy = opener
+		p.CrossOriginEmbedderPolicy = embedder
+		p.CrossOriginResourcePolicy = resource
+	}
 }
 
 // WithCORS configures CORS headers for cross-origin access.
-func (p *SecurityHeadersProcessor) WithCORS(config *CORSConfig) *SecurityHeadersProcessor {
-	p.CORS = config
-	return p
+func WithCORS(config *CORSConfig) SecurityHeadersOption {
+	return func(p *SecurityHeadersProcessor) {
+		p.CORS = config
+	}
 }
 
 // Process implements endpoint.Processor.

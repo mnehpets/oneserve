@@ -137,7 +137,7 @@ func TestSecurityHeadersProcessor_DefaultHeaders(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CustomHSTS(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithHSTS(7776000, false, true)
+	p := NewSecurityHeadersProcessor(WithHSTS(7776000, false, true))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 
@@ -163,7 +163,7 @@ func TestSecurityHeadersProcessor_CustomHSTS(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_DisableHSTS(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithoutHSTS()
+	p := NewSecurityHeadersProcessor(WithoutHSTS())
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 
@@ -182,7 +182,7 @@ func TestSecurityHeadersProcessor_DisableHSTS(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CustomCSP(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithCSP("default-src https:")
+	p := NewSecurityHeadersProcessor(WithCSP("default-src https:"))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 
@@ -194,7 +194,7 @@ func TestSecurityHeadersProcessor_CustomCSP(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CustomCrossOriginPolicies(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithCrossOriginPolicies("unsafe-none", "credentialless", "cross-origin")
+	p := NewSecurityHeadersProcessor(WithCrossOriginPolicies("unsafe-none", "credentialless", "cross-origin"))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 
@@ -212,7 +212,7 @@ func TestSecurityHeadersProcessor_CustomCrossOriginPolicies(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CustomReferrerPolicy(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithReferrerPolicy("no-referrer")
+	p := NewSecurityHeadersProcessor(WithReferrerPolicy("no-referrer"))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 
@@ -232,7 +232,7 @@ func TestSecurityHeadersProcessor_CustomReferrerPolicy(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CustomFrameOptions(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithFrameOptions("SAMEORIGIN")
+	p := NewSecurityHeadersProcessor(WithFrameOptions("SAMEORIGIN"))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 
@@ -252,7 +252,7 @@ func TestSecurityHeadersProcessor_CustomFrameOptions(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_DisableContentTypeOptions(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithContentTypeOptions(false)
+	p := NewSecurityHeadersProcessor(WithContentTypeOptions(false))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 
@@ -271,12 +271,12 @@ func TestSecurityHeadersProcessor_DisableContentTypeOptions(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CORS_SimpleOrigin(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
+	p := NewSecurityHeadersProcessor(WithCORS(&CORSConfig{
 		AllowedOrigins: []string{"https://example.com"},
 		AllowedMethods: []string{"GET", "POST"},
 		AllowedHeaders: []string{"Content-Type"},
 		MaxAge:         3600,
-	})
+	}))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 	r.Header.Set("Origin", "https://example.com")
@@ -308,10 +308,10 @@ func TestSecurityHeadersProcessor_CORS_SimpleOrigin(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CORS_Wildcard(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
+	p := NewSecurityHeadersProcessor(WithCORS(&CORSConfig{
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"GET"},
-	})
+	}))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 	r.Header.Set("Origin", "https://anysite.com")
@@ -333,11 +333,11 @@ func TestSecurityHeadersProcessor_CORS_Wildcard(t *testing.T) {
 
 func TestSecurityHeadersProcessor_CORS_WildcardWithCredentials(t *testing.T) {
 	// Security test: Wildcard with credentials should not set wildcard origin
-	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
+	p := NewSecurityHeadersProcessor(WithCORS(&CORSConfig{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET"},
 		AllowCredentials: true,
-	})
+	}))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 	r.Header.Set("Origin", "https://anysite.com")
@@ -358,10 +358,10 @@ func TestSecurityHeadersProcessor_CORS_WildcardWithCredentials(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CORS_UnauthorizedOrigin(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
+	p := NewSecurityHeadersProcessor(WithCORS(&CORSConfig{
 		AllowedOrigins: []string{"https://example.com"},
 		AllowedMethods: []string{"GET"},
-	})
+	}))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 	r.Header.Set("Origin", "https://evil.com")
@@ -382,10 +382,10 @@ func TestSecurityHeadersProcessor_CORS_UnauthorizedOrigin(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CORS_NoOriginHeader(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
+	p := NewSecurityHeadersProcessor(WithCORS(&CORSConfig{
 		AllowedOrigins: []string{"https://example.com"},
 		AllowedMethods: []string{"GET"},
-	})
+	}))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 	// Test case with no Origin header to verify CORS headers are not set when
@@ -408,11 +408,11 @@ func TestSecurityHeadersProcessor_CORS_NoOriginHeader(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CORS_Credentials(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
+	p := NewSecurityHeadersProcessor(WithCORS(&CORSConfig{
 		AllowedOrigins:   []string{"https://example.com"},
 		AllowedMethods:   []string{"GET"},
 		AllowCredentials: true,
-	})
+	}))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 	r.Header.Set("Origin", "https://example.com")
@@ -433,12 +433,12 @@ func TestSecurityHeadersProcessor_CORS_Credentials(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CORS_PreflightShortCircuit(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
+	p := NewSecurityHeadersProcessor(WithCORS(&CORSConfig{
 		AllowedOrigins: []string{"https://example.com"},
 		AllowedMethods: []string{"GET", "POST"},
 		AllowedHeaders: []string{"Content-Type", "Authorization"},
 		MaxAge:         7200,
-	})
+	}))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("OPTIONS", "/", nil)
 	r.Header.Set("Origin", "https://example.com")
@@ -475,9 +475,9 @@ func TestSecurityHeadersProcessor_CORS_PreflightShortCircuit(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CORS_NormalOptions_PassThrough(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
+	p := NewSecurityHeadersProcessor(WithCORS(&CORSConfig{
 		AllowedOrigins: []string{"https://example.com"},
-	})
+	}))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("OPTIONS", "/", nil)
 	r.Header.Set("Origin", "https://example.com")
@@ -505,10 +505,10 @@ func TestSecurityHeadersProcessor_CORS_NormalOptions_PassThrough(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_CORS_ExposedHeaders(t *testing.T) {
-	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
+	p := NewSecurityHeadersProcessor(WithCORS(&CORSConfig{
 		AllowedOrigins: []string{"https://example.com"},
 		ExposedHeaders: []string{"X-Custom-Header", "X-Another-Header"},
-	})
+	}))
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 	r.Header.Set("Origin", "https://example.com")
@@ -529,18 +529,18 @@ func TestSecurityHeadersProcessor_CORS_ExposedHeaders(t *testing.T) {
 }
 
 func TestSecurityHeadersProcessor_AllHeadersCombined(t *testing.T) {
-	p := NewSecurityHeadersProcessor().
-		WithHSTS(7776000, true, false).
-		WithReferrerPolicy("same-origin").
-		WithFrameOptions("SAMEORIGIN").
-		WithContentTypeOptions(true).
+	p := NewSecurityHeadersProcessor(
+		WithHSTS(7776000, true, false),
+		WithReferrerPolicy("same-origin"),
+		WithFrameOptions("SAMEORIGIN"),
+		WithContentTypeOptions(true),
 		WithCORS(&CORSConfig{
-			AllowedOrigins: []string{"https://example.com"},
-			AllowedMethods: []string{"GET", "POST", "PUT"},
-			AllowedHeaders: []string{"Content-Type", "Authorization"},
+			AllowedOrigins:   []string{"https://example.com"},
+			AllowedMethods:   []string{"GET", "POST", "PUT"},
+			AllowedHeaders:   []string{"Content-Type", "Authorization"},
 			AllowCredentials: true,
-			MaxAge:         3600,
-		})
+			MaxAge:           3600,
+		}))
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
