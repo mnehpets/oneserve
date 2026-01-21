@@ -42,10 +42,23 @@ type ByteSlice interface {
 
 // Session is request-scoped session state.
 type Session interface {
+	// ID returns the session identifier.
+	// Returns an empty string if the session is not initialized.
 	ID() string
+	// Username returns the authenticated username and a boolean flag indicating
+	// whether the user is logged in.
+	// The second return value is true if the user is logged in, false otherwise.
+	// When the user is not logged in, the username is an empty string.
 	Username() (string, bool)
+	// Login authenticates the user with the given username.
+	// This creates a new session with a fresh session ID and clears any existing session data.
+	// Returns an error if the session is nil.
 	Login(username string) error
+	// Logout clears the session data and logs out the user.
+	// Returns an error if the session is nil.
 	Logout() error
+	// Expires returns the expiration time of the session.
+	// Returns the zero time if the session is not initialized.
 	Expires() time.Time
 	// Get unmarshals the value associated with key into dest.
 	// dest must be a pointer.
@@ -53,6 +66,8 @@ type Session interface {
 	// Set stores the value associated with key.
 	// value will be marshaled using the session's codec.
 	Set(key string, value any) error
+	// Delete removes the value associated with key from the session.
+	// This is a no-op if the key does not exist or the session is not initialized.
 	Delete(key string)
 }
 
