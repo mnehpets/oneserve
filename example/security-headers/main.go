@@ -13,6 +13,11 @@ type APIParams struct{}
 
 // PublicAPIEndpoint is a simple API endpoint that returns JSON.
 func PublicAPIEndpoint(w http.ResponseWriter, r *http.Request, params APIParams) (endpoint.Renderer, error) {
+	// Handle preflight requests
+	if r.Method == "OPTIONS" {
+		return &endpoint.NoContentRenderer{Status: http.StatusNoContent}, nil
+	}
+
 	return &endpoint.JSONRenderer{
 		Value: map[string]string{
 			"message": "Hello from secure API!",
@@ -52,16 +57,18 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Endpoint with default security headers
-	mux.Handle("GET /api/secure", endpoint.HandleFunc(PublicAPIEndpoint, defaultSecurity))
+	mux.HandleFunc("GET /api/secure", endpoint.HandleFunc(PublicAPIEndpoint, defaultSecurity))
 
-	// Endpoint with CORS for specific origins
-	mux.Handle("GET /api/cors", endpoint.HandleFunc(PublicAPIEndpoint, corsSecurity))
+	// Endpoint with CORS for specific origins (with preflight support)
+	mux.HandleFunc("GET /api/cors", endpoint.HandleFunc(PublicAPIEndpoint, corsSecurity))
+	mux.HandleFunc("OPTIONS /api/cors", endpoint.HandleFunc(PublicAPIEndpoint, corsSecurity))
 
 	// Endpoint with custom security settings
-	mux.Handle("GET /api/custom", endpoint.HandleFunc(PublicAPIEndpoint, customSecurity))
+	mux.HandleFunc("GET /api/custom", endpoint.HandleFunc(PublicAPIEndpoint, customSecurity))
 
-	// Public endpoint with wildcard CORS
-	mux.Handle("GET /api/public", endpoint.HandleFunc(PublicAPIEndpoint, publicCORS))
+	// Public endpoint with wildcard CORS (with preflight support)
+	mux.HandleFunc("GET /api/public", endpoint.HandleFunc(PublicAPIEndpoint, publicCORS))
+	mux.HandleFunc("OPTIONS /api/public", endpoint.HandleFunc(PublicAPIEndpoint, publicCORS))
 
 	log.Println("Server starting on :8080")
 	log.Println("Try these endpoints:")
