@@ -204,36 +204,29 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request, config *CORSConfig) 
 		return
 	}
 
+	// CORS headers should only be set when there's an actual cross-origin request
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return
+	}
+
 	// Set Access-Control-Allow-Origin
 	if len(config.AllowedOrigins) > 0 {
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			// Check if origin is allowed
-			for _, allowed := range config.AllowedOrigins {
-				if allowed == "*" || allowed == origin {
-					w.Header().Set("Access-Control-Allow-Origin", allowed)
-					break
+		// Check if origin is allowed
+		for _, allowed := range config.AllowedOrigins {
+			if allowed == "*" {
+				// Security: Never set wildcard origin with credentials
+				if config.AllowCredentials {
+					// Skip wildcard when credentials are enabled
+					continue
 				}
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				break
+			} else if allowed == origin {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				break
 			}
-		} else if len(config.AllowedOrigins) == 1 {
-			// If no origin header, set the single allowed origin
-			w.Header().Set("Access-Control-Allow-Origin", config.AllowedOrigins[0])
 		}
-	}
-
-	// Set Access-Control-Allow-Methods
-	if len(config.AllowedMethods) > 0 {
-		w.Header().Set("Access-Control-Allow-Methods", strings.Join(config.AllowedMethods, ", "))
-	}
-
-	// Set Access-Control-Allow-Headers
-	if len(config.AllowedHeaders) > 0 {
-		w.Header().Set("Access-Control-Allow-Headers", strings.Join(config.AllowedHeaders, ", "))
-	}
-
-	// Set Access-Control-Expose-Headers
-	if len(config.ExposedHeaders) > 0 {
-		w.Header().Set("Access-Control-Expose-Headers", strings.Join(config.ExposedHeaders, ", "))
 	}
 
 	// Set Access-Control-Allow-Credentials
@@ -241,9 +234,27 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request, config *CORSConfig) 
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 	}
 
-	// Set Access-Control-Max-Age for preflight requests
-	if r.Method == "OPTIONS" && config.MaxAge > 0 {
-		w.Header().Set("Access-Control-Max-Age", strconv.Itoa(config.MaxAge))
+	// Set Access-Control-Expose-Headers (for simple requests)
+	if len(config.ExposedHeaders) > 0 {
+		w.Header().Set("Access-Control-Expose-Headers", strings.Join(config.ExposedHeaders, ", "))
+	}
+
+	// Preflight-specific headers (only for OPTIONS requests)
+	if r.Method == "OPTIONS" {
+		// Set Access-Control-Allow-Methods
+		if len(config.AllowedMethods) > 0 {
+			w.Header().Set("Access-Control-Allow-Methods", strings.Join(config.AllowedMethods, ", "))
+		}
+
+		// Set Access-Control-Allow-Headers
+		if len(config.AllowedHeaders) > 0 {
+			w.Header().Set("Access-Control-Allow-Headers", strings.Join(config.AllowedHeaders, ", "))
+		}
+
+		// Set Access-Control-Max-Age for preflight requests
+		if config.MaxAge > 0 {
+			w.Header().Set("Access-Control-Max-Age", strconv.Itoa(config.MaxAge))
+		}
 	}
 }
 

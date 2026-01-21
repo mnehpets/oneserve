@@ -219,14 +219,15 @@ func TestSecurityHeadersProcessor_CORS_SimpleOrigin(t *testing.T) {
 		t.Errorf("Access-Control-Allow-Origin: got %q, want %q", origin, "https://example.com")
 	}
 
+	// For simple (non-preflight) requests, methods and headers should NOT be set
 	methods := w.Header().Get("Access-Control-Allow-Methods")
-	if methods != "GET, POST" {
-		t.Errorf("Access-Control-Allow-Methods: got %q, want %q", methods, "GET, POST")
+	if methods != "" {
+		t.Errorf("Access-Control-Allow-Methods should not be set for simple requests, got %q", methods)
 	}
 
 	headers := w.Header().Get("Access-Control-Allow-Headers")
-	if headers != "Content-Type" {
-		t.Errorf("Access-Control-Allow-Headers: got %q, want %q", headers, "Content-Type")
+	if headers != "" {
+		t.Errorf("Access-Control-Allow-Headers should not be set for simple requests, got %q", headers)
 	}
 }
 
@@ -251,6 +252,32 @@ func TestSecurityHeadersProcessor_CORS_Wildcard(t *testing.T) {
 	origin := w.Header().Get("Access-Control-Allow-Origin")
 	if origin != "*" {
 		t.Errorf("Access-Control-Allow-Origin: got %q, want %q", origin, "*")
+	}
+}
+
+func TestSecurityHeadersProcessor_CORS_WildcardWithCredentials(t *testing.T) {
+	// Security test: Wildcard with credentials should not set wildcard origin
+	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
+		AllowedOrigins:   []string{"*"},
+		AllowedMethods:   []string{"GET"},
+		AllowCredentials: true,
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("Origin", "https://anysite.com")
+
+	next := func(w http.ResponseWriter, r *http.Request) error {
+		return nil
+	}
+
+	err := p.Process(w, r, next)
+	if err != nil {
+		t.Fatalf("Process returned error: %v", err)
+	}
+
+	origin := w.Header().Get("Access-Control-Allow-Origin")
+	if origin != "" {
+		t.Errorf("Access-Control-Allow-Origin should not be set when using wildcard with credentials, got %q", origin)
 	}
 }
 
@@ -296,9 +323,10 @@ func TestSecurityHeadersProcessor_CORS_NoOriginHeader(t *testing.T) {
 		t.Fatalf("Process returned error: %v", err)
 	}
 
+	// CORS headers should NOT be set when there's no Origin header
 	origin := w.Header().Get("Access-Control-Allow-Origin")
-	if origin != "https://example.com" {
-		t.Errorf("Access-Control-Allow-Origin: got %q, want %q", origin, "https://example.com")
+	if origin != "" {
+		t.Errorf("Access-Control-Allow-Origin should not be set without Origin header, got %q", origin)
 	}
 }
 
@@ -331,6 +359,7 @@ func TestSecurityHeadersProcessor_CORS_PreflightMaxAge(t *testing.T) {
 	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
 		AllowedOrigins: []string{"https://example.com"},
 		AllowedMethods: []string{"GET", "POST"},
+		AllowedHeaders: []string{"Content-Type", "Authorization"},
 		MaxAge:         7200,
 	})
 	w := httptest.NewRecorder()
@@ -344,6 +373,22 @@ func TestSecurityHeadersProcessor_CORS_PreflightMaxAge(t *testing.T) {
 	err := p.Process(w, r, next)
 	if err != nil {
 		t.Fatalf("Process returned error: %v", err)
+	}
+
+	// For preflight requests, all CORS headers should be set
+	origin := w.Header().Get("Access-Control-Allow-Origin")
+	if origin != "https://example.com" {
+		t.Errorf("Access-Control-Allow-Origin: got %q, want %q", origin, "https://example.com")
+	}
+
+	methods := w.Header().Get("Access-Control-Allow-Methods")
+	if methods != "GET, POST" {
+		t.Errorf("Access-Control-Allow-Methods: got %q, want %q", methods, "GET, POST")
+	}
+
+	headers := w.Header().Get("Access-Control-Allow-Headers")
+	if headers != "Content-Type, Authorization" {
+		t.Errorf("Access-Control-Allow-Headers: got %q, want %q", headers, "Content-Type, Authorization")
 	}
 
 	maxAge := w.Header().Get("Access-Control-Max-Age")
