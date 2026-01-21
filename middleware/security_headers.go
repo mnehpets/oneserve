@@ -35,6 +35,22 @@ type SecurityHeadersProcessor struct {
 	// Set to false to disable. Default: true (nosniff)
 	ContentTypeOptions bool
 
+	// ContentSecurityPolicy sets the Content-Security-Policy header.
+	// Set to empty string to disable.
+	ContentSecurityPolicy string
+
+	// CrossOriginOpenerPolicy sets the Cross-Origin-Opener-Policy header.
+	// Set to empty string to disable.
+	CrossOriginOpenerPolicy string
+
+	// CrossOriginEmbedderPolicy sets the Cross-Origin-Embedder-Policy header.
+	// Set to empty string to disable.
+	CrossOriginEmbedderPolicy string
+
+	// CrossOriginResourcePolicy sets the Cross-Origin-Resource-Policy header.
+	// Set to empty string to disable.
+	CrossOriginResourcePolicy string
+
 	// CORS configures Cross-Origin Resource Sharing headers.
 	// Set to nil to disable CORS headers.
 	CORS *CORSConfig
@@ -86,7 +102,7 @@ type CORSConfig struct {
 	MaxAge int
 }
 
-// NewSecurityHeadersProcessor creates a SecurityHeadersProcessor with recommended defaults.
+// NewSecurityHeadersProcessor creates a SecurityHeadersProcessor with recommended defaults for web content.
 func NewSecurityHeadersProcessor() *SecurityHeadersProcessor {
 	return &SecurityHeadersProcessor{
 		HSTS: &HSTSConfig{
@@ -94,10 +110,33 @@ func NewSecurityHeadersProcessor() *SecurityHeadersProcessor {
 			IncludeSubDomains: true,
 			Preload:           false,
 		},
-		ReferrerPolicy:     "strict-origin-when-cross-origin",
-		FrameOptions:       "DENY",
-		ContentTypeOptions: true,
-		CORS:               nil, // No CORS by default
+		ReferrerPolicy:            "strict-origin-when-cross-origin",
+		FrameOptions:              "DENY",
+		ContentTypeOptions:        true,
+		ContentSecurityPolicy:     "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests",
+		CrossOriginOpenerPolicy:   "same-origin",
+		CrossOriginEmbedderPolicy: "require-corp",
+		CrossOriginResourcePolicy: "same-origin",
+		CORS:                      nil, // No CORS by default
+	}
+}
+
+// NewAPISecurityHeadersProcessor creates a SecurityHeadersProcessor with defaults for APIs.
+func NewAPISecurityHeadersProcessor() *SecurityHeadersProcessor {
+	return &SecurityHeadersProcessor{
+		HSTS: &HSTSConfig{
+			MaxAge:            31536000, // 1 year
+			IncludeSubDomains: true,
+			Preload:           false,
+		},
+		ReferrerPolicy:            "no-referrer",
+		FrameOptions:              "DENY",
+		ContentTypeOptions:        true,
+		ContentSecurityPolicy:     "default-src 'none'; frame-ancestors 'none'",
+		CrossOriginOpenerPolicy:   "same-origin",
+		CrossOriginEmbedderPolicy: "require-corp",
+		CrossOriginResourcePolicy: "same-origin",
+		CORS:                      nil,
 	}
 }
 
@@ -139,6 +178,20 @@ func (p *SecurityHeadersProcessor) WithContentTypeOptions(enabled bool) *Securit
 	return p
 }
 
+// WithCSP sets the Content-Security-Policy header.
+func (p *SecurityHeadersProcessor) WithCSP(policy string) *SecurityHeadersProcessor {
+	p.ContentSecurityPolicy = policy
+	return p
+}
+
+// WithCrossOriginPolicies sets COOP, COEP, and CORP headers.
+func (p *SecurityHeadersProcessor) WithCrossOriginPolicies(opener, embedder, resource string) *SecurityHeadersProcessor {
+	p.CrossOriginOpenerPolicy = opener
+	p.CrossOriginEmbedderPolicy = embedder
+	p.CrossOriginResourcePolicy = resource
+	return p
+}
+
 // WithCORS configures CORS headers for cross-origin access.
 func (p *SecurityHeadersProcessor) WithCORS(config *CORSConfig) *SecurityHeadersProcessor {
 	p.CORS = config
@@ -170,9 +223,34 @@ func (p *SecurityHeadersProcessor) Process(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
 
+	// Set Content-Security-Policy header
+	if p.ContentSecurityPolicy != "" {
+		w.Header().Set("Content-Security-Policy", p.ContentSecurityPolicy)
+	}
+
+	// Set Cross-Origin policies
+	if p.CrossOriginOpenerPolicy != "" {
+		w.Header().Set("Cross-Origin-Opener-Policy", p.CrossOriginOpenerPolicy)
+	}
+	if p.CrossOriginEmbedderPolicy != "" {
+		w.Header().Set("Cross-Origin-Embedder-Policy", p.CrossOriginEmbedderPolicy)
+	}
+	if p.CrossOriginResourcePolicy != "" {
+		w.Header().Set("Cross-Origin-Resource-Policy", p.CrossOriginResourcePolicy)
+	}
+
 	// Set CORS headers
 	if p.CORS != nil {
 		setCORSHeaders(w, r, p.CORS)
+
+		// Short-circuit CORS Preflight requests.
+		// A preflight request is an OPTIONS request with an Origin and Access-Control-Request-Method.
+		// We can return a 204 No Content response directly.
+		if r.Method == http.MethodOptions &&
+			r.Header.Get("Origin") != "" &&
+			r.Header.Get("Access-Control-Request-Method") != "" {
+			return endpoint.Error(http.StatusNoContent, "", nil)
+		}
 	}
 
 	return next(w, r)

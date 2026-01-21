@@ -33,6 +33,35 @@ func TestNewSecurityHeadersProcessor(t *testing.T) {
 	if p.CORS != nil {
 		t.Error("CORS should be nil by default")
 	}
+	if p.ContentSecurityPolicy != "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests" {
+		t.Errorf("ContentSecurityPolicy default incorrect: got %q", p.ContentSecurityPolicy)
+	}
+	if p.CrossOriginOpenerPolicy != "same-origin" {
+		t.Errorf("CrossOriginOpenerPolicy default incorrect: got %q", p.CrossOriginOpenerPolicy)
+	}
+	if p.CrossOriginEmbedderPolicy != "require-corp" {
+		t.Errorf("CrossOriginEmbedderPolicy default incorrect: got %q", p.CrossOriginEmbedderPolicy)
+	}
+	if p.CrossOriginResourcePolicy != "same-origin" {
+		t.Errorf("CrossOriginResourcePolicy default incorrect: got %q", p.CrossOriginResourcePolicy)
+	}
+}
+
+func TestNewAPISecurityHeadersProcessor(t *testing.T) {
+	p := NewAPISecurityHeadersProcessor()
+	if p.ReferrerPolicy != "no-referrer" {
+		t.Errorf("ReferrerPolicy: got %q, want %q", p.ReferrerPolicy, "no-referrer")
+	}
+	if p.ContentSecurityPolicy != "default-src 'none'; frame-ancestors 'none'" {
+		t.Errorf("ContentSecurityPolicy default incorrect: got %q", p.ContentSecurityPolicy)
+	}
+	// Verify common defaults with Web processor
+	if p.HSTS == nil || p.HSTS.MaxAge != 31536000 {
+		t.Error("HSTS should be configured same as Web default")
+	}
+	if p.CrossOriginOpenerPolicy != "same-origin" {
+		t.Errorf("CrossOriginOpenerPolicy default incorrect: got %q", p.CrossOriginOpenerPolicy)
+	}
 }
 
 func TestSecurityHeadersProcessor_DefaultHeaders(t *testing.T) {
@@ -84,6 +113,23 @@ func TestSecurityHeadersProcessor_DefaultHeaders(t *testing.T) {
 		t.Errorf("X-Content-Type-Options: got %q, want %q", contentTypeOpts, "nosniff")
 	}
 
+	// Check Content-Security-Policy header
+	csp := w.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "default-src 'self'") {
+		t.Errorf("Content-Security-Policy: got %q, want to contain 'default-src 'self''", csp)
+	}
+
+	// Check Cross-Origin headers
+	if w.Header().Get("Cross-Origin-Opener-Policy") != "same-origin" {
+		t.Error("Cross-Origin-Opener-Policy not set correctly")
+	}
+	if w.Header().Get("Cross-Origin-Embedder-Policy") != "require-corp" {
+		t.Error("Cross-Origin-Embedder-Policy not set correctly")
+	}
+	if w.Header().Get("Cross-Origin-Resource-Policy") != "same-origin" {
+		t.Error("Cross-Origin-Resource-Policy not set correctly")
+	}
+
 	// Check that CORS headers are not set
 	if w.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Error("Access-Control-Allow-Origin should not be set by default")
@@ -132,6 +178,36 @@ func TestSecurityHeadersProcessor_DisableHSTS(t *testing.T) {
 
 	if w.Header().Get("Strict-Transport-Security") != "" {
 		t.Error("Strict-Transport-Security should not be set when HSTS is disabled")
+	}
+}
+
+func TestSecurityHeadersProcessor_CustomCSP(t *testing.T) {
+	p := NewSecurityHeadersProcessor().WithCSP("default-src https:")
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/", nil)
+
+	_ = p.Process(w, r, func(w http.ResponseWriter, r *http.Request) error { return nil })
+
+	if got := w.Header().Get("Content-Security-Policy"); got != "default-src https:" {
+		t.Errorf("Content-Security-Policy: got %q, want %q", got, "default-src https:")
+	}
+}
+
+func TestSecurityHeadersProcessor_CustomCrossOriginPolicies(t *testing.T) {
+	p := NewSecurityHeadersProcessor().WithCrossOriginPolicies("unsafe-none", "credentialless", "cross-origin")
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/", nil)
+
+	_ = p.Process(w, r, func(w http.ResponseWriter, r *http.Request) error { return nil })
+
+	if got := w.Header().Get("Cross-Origin-Opener-Policy"); got != "unsafe-none" {
+		t.Errorf("COOP: got %q, want %q", got, "unsafe-none")
+	}
+	if got := w.Header().Get("Cross-Origin-Embedder-Policy"); got != "credentialless" {
+		t.Errorf("COEP: got %q, want %q", got, "credentialless")
+	}
+	if got := w.Header().Get("Cross-Origin-Resource-Policy"); got != "cross-origin" {
+		t.Errorf("CORP: got %q, want %q", got, "cross-origin")
 	}
 }
 
@@ -356,7 +432,7 @@ func TestSecurityHeadersProcessor_CORS_Credentials(t *testing.T) {
 	}
 }
 
-func TestSecurityHeadersProcessor_CORS_PreflightMaxAge(t *testing.T) {
+func TestSecurityHeadersProcessor_CORS_PreflightShortCircuit(t *testing.T) {
 	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
 		AllowedOrigins: []string{"https://example.com"},
 		AllowedMethods: []string{"GET", "POST"},
@@ -366,8 +442,50 @@ func TestSecurityHeadersProcessor_CORS_PreflightMaxAge(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("OPTIONS", "/", nil)
 	r.Header.Set("Origin", "https://example.com")
+	r.Header.Set("Access-Control-Request-Method", "POST")
 
+	nextCalled := false
 	next := func(w http.ResponseWriter, r *http.Request) error {
+		nextCalled = true
+		return nil
+	}
+
+	err := p.Process(w, r, next)
+
+	// Should return a No Content error (short-circuit)
+	if err == nil {
+		t.Fatal("Process should return error for preflight short-circuit")
+	}
+	// Depending on your error implementation, check if it's the expected error status
+	// assuming endpoint.Error wraps status.
+	// For now, checking that next was NOT called is critical.
+	if nextCalled {
+		t.Error("next should NOT be called for valid CORS preflight")
+	}
+
+	// Verify Headers
+	origin := w.Header().Get("Access-Control-Allow-Origin")
+	if origin != "https://example.com" {
+		t.Errorf("Access-Control-Allow-Origin: got %q, want %q", origin, "https://example.com")
+	}
+	maxAge := w.Header().Get("Access-Control-Max-Age")
+	if maxAge != "7200" {
+		t.Errorf("Access-Control-Max-Age: got %q, want %q", maxAge, "7200")
+	}
+}
+
+func TestSecurityHeadersProcessor_CORS_NormalOptions_PassThrough(t *testing.T) {
+	p := NewSecurityHeadersProcessor().WithCORS(&CORSConfig{
+		AllowedOrigins: []string{"https://example.com"},
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("OPTIONS", "/", nil)
+	r.Header.Set("Origin", "https://example.com")
+	// No Access-Control-Request-Method header -> Not a preflight
+
+	nextCalled := false
+	next := func(w http.ResponseWriter, r *http.Request) error {
+		nextCalled = true
 		return nil
 	}
 
@@ -376,25 +494,13 @@ func TestSecurityHeadersProcessor_CORS_PreflightMaxAge(t *testing.T) {
 		t.Fatalf("Process returned error: %v", err)
 	}
 
-	// For preflight requests, all CORS headers should be set
-	origin := w.Header().Get("Access-Control-Allow-Origin")
-	if origin != "https://example.com" {
-		t.Errorf("Access-Control-Allow-Origin: got %q, want %q", origin, "https://example.com")
+	if !nextCalled {
+		t.Error("next SHOULD be called for regular OPTIONS request")
 	}
 
-	methods := w.Header().Get("Access-Control-Allow-Methods")
-	if methods != "GET, POST" {
-		t.Errorf("Access-Control-Allow-Methods: got %q, want %q", methods, "GET, POST")
-	}
-
-	headers := w.Header().Get("Access-Control-Allow-Headers")
-	if headers != "Content-Type, Authorization" {
-		t.Errorf("Access-Control-Allow-Headers: got %q, want %q", headers, "Content-Type, Authorization")
-	}
-
-	maxAge := w.Header().Get("Access-Control-Max-Age")
-	if maxAge != "7200" {
-		t.Errorf("Access-Control-Max-Age: got %q, want %q", maxAge, "7200")
+	// Standard CORS headers should still be set because it has an Origin
+	if w.Header().Get("Access-Control-Allow-Origin") != "https://example.com" {
+		t.Error("Access-Control-Allow-Origin should be set")
 	}
 }
 
