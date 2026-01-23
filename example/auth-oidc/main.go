@@ -84,12 +84,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Using "OSS" as cookie name (default)
+	// Using "OSS" as cookie name (default). Allow non-https cookies, for http://localhost:8080
 	sessionProcessor, err := middleware.NewSessionProcessor(
 		middleware.DefaultCookieName,
 		"key1",
 		map[string][]byte{"key1": sessionKey},
-		middleware.WithCookieOptions("/", "", false, true, http.SameSiteLaxMode), // secure=false for local dev
+		middleware.WithCookieOptions(
+			middleware.WithSecure(false),
+		),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -113,19 +115,11 @@ func main() {
 		log.Fatalf("Failed to register OIDC provider: %v", err)
 	}
 
-	// Auth state cookie (separate from session cookie)
-	authCookie, err := middleware.NewCustomSecureCookie[auth.AuthStateMap](
-		auth.DefaultCookieName,
-		"key1",
-		map[string][]byte{"key1": sessionKey}, // Share key with session cookie
-		nil, nil,                              // use default cbor marshal
-		middleware.WithCookieOptions("/auth", "", false, true, http.SameSiteLaxMode),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	authHandler := auth.NewHandler(registry, authCookie, "http://localhost:8080", "/auth",
+	// Use "OSA" as cookie name (default). Also allow non-https for http://localhost:8080.
+	authHandler, err := auth.NewHandler(registry, auth.DefaultCookieName, "key1", map[string][]byte{"key1": sessionKey}, "http://localhost:8080", "/auth",
+		auth.WithCookieOptions(
+			middleware.WithSecure(false),
+		),
 		auth.WithSuccessEndpoint(func(w http.ResponseWriter, r *http.Request, params *auth.SuccessParams) (endpoint.Renderer, error) {
 			session, ok := middleware.SessionFromContext(r.Context())
 			if !ok {
@@ -150,6 +144,9 @@ func main() {
 		}),
 		auth.WithProcessors(sessionProcessor),
 	)
+	if err != nil {
+		log.Fatalf("Failed to create auth handler: %v", err)
+	}
 
 	// 3. Setup Router
 	mux := http.NewServeMux()

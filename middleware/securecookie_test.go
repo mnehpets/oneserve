@@ -32,7 +32,8 @@ func TestSecureCookieAEAD_RoundTrip(t *testing.T) {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
 
-	sc, err := NewSecureCookie[testPayload]("sc", "a", keys, WithCookieOptions("/", "example.com", false, true, http.SameSiteNoneMode))
+	sc, err := NewSecureCookie[testPayload]("sc", "a", keys,
+		WithPath("/"), WithDomain("example.com"), WithSecure(false), WithSameSite(http.SameSiteNoneMode))
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD: %v", err)
 	}
@@ -238,11 +239,13 @@ func TestSecureCookieAEAD_AADMismatchRejected(t *testing.T) {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
 
-	sc1, err := NewSecureCookie[testPayload]("sc", "a", keys, WithCookieOptions("/", "example.com", false, true, http.SameSiteLaxMode))
+	sc1, err := NewSecureCookie[testPayload]("sc", "a", keys,
+		WithPath("/"), WithDomain("example.com"), WithSecure(false), WithSameSite(http.SameSiteLaxMode))
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD(sc1): %v", err)
 	}
-	sc2, err := NewSecureCookie[testPayload]("sc", "a", keys, WithCookieOptions("/", "other.com", false, true, http.SameSiteLaxMode))
+	sc2, err := NewSecureCookie[testPayload]("sc", "a", keys,
+		WithPath("/"), WithDomain("other.com"), WithSecure(false), WithSameSite(http.SameSiteLaxMode))
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD(sc2): %v", err)
 	}

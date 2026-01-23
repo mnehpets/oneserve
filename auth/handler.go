@@ -82,6 +82,9 @@ type AuthHandler struct {
 
 	// processors are the middleware processors to run for each endpoint
 	processors []endpoint.Processor
+
+	// cookieOptions are used to configure the secure cookie
+	cookieOptions []middleware.SecureCookieOption
 }
 
 // Option configures the AuthHandler.
@@ -91,6 +94,13 @@ type Option func(*AuthHandler)
 func WithProcessors(p ...endpoint.Processor) Option {
 	return func(ah *AuthHandler) {
 		ah.processors = append(ah.processors, p...)
+	}
+}
+
+// WithCookieOptions configures the auth cookie attributes.
+func WithCookieOptions(opts ...middleware.SecureCookieOption) Option {
+	return func(ah *AuthHandler) {
+		ah.cookieOptions = append(ah.cookieOptions, opts...)
 	}
 }
 
@@ -125,11 +135,10 @@ const authStateTTL = time.Hour
 // NewHandler creates a new AuthHandler.
 // publicURL should be the base public URL of the application (e.g., "https://example.com").
 // basePath is the path where this handler is mounted (e.g., "/auth").
-func NewHandler(registry *Registry, cookie middleware.SecureCookie[AuthStateMap], publicURL, basePath string, opts ...Option) *AuthHandler {
+func NewHandler(registry *Registry, cookieName, keyID string, keys map[string][]byte, publicURL, basePath string, opts ...Option) (*AuthHandler, error) {
 	h := &AuthHandler{
 		mux:       http.NewServeMux(),
 		registry:  registry,
-		cookie:    cookie,
 		publicURL: strings.TrimRight(publicURL, "/"),
 		basePath:  basePath,
 		preAuth:   defaultPreAuthHook,
@@ -139,6 +148,12 @@ func NewHandler(registry *Registry, cookie middleware.SecureCookie[AuthStateMap]
 	for _, opt := range opts {
 		opt(h)
 	}
+
+	cookie, err := middleware.NewSecureCookie[AuthStateMap](cookieName, keyID, keys, h.cookieOptions...)
+	if err != nil {
+		return nil, err
+	}
+	h.cookie = cookie
 
 	// Ensure leading slash for basePath
 	if !strings.HasPrefix(basePath, "/") {
@@ -294,7 +309,7 @@ func NewHandler(registry *Registry, cookie middleware.SecureCookie[AuthStateMap]
 		return h.success(w, r, &successParams)
 	}, h.processors...))
 
-	return h
+	return h, nil
 }
 
 func (h *AuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

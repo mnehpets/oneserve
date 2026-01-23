@@ -327,9 +327,7 @@ func TestSession_LoginLogout_NilReceiver_ReturnsError(t *testing.T) {
 }
 
 func TestSessionProcessor_NoCookie_PassesThrough(t *testing.T) {
-	p, _ := newTestSessionProcessor(t)
-	p.MaxAge = time.Minute
-	p.ExtendThreshold = 10 * time.Second
+	p, _ := newTestSessionProcessor(t, WithMaxAge(time.Minute), WithExtendThreshold(10*time.Second))
 
 	r := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
 	w := httptest.NewRecorder()
@@ -362,9 +360,7 @@ func TestSessionProcessor_NoCookie_PassesThrough(t *testing.T) {
 }
 
 func TestSessionProcessor_InvalidCookie_Clears(t *testing.T) {
-	p, _ := newTestSessionProcessor(t)
-	p.MaxAge = time.Minute
-	p.ExtendThreshold = 10 * time.Second
+	p, _ := newTestSessionProcessor(t, WithMaxAge(time.Minute), WithExtendThreshold(10*time.Second))
 
 	r := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
 	r.AddCookie(&http.Cookie{Name: "OSS", Value: "bad"})
@@ -397,9 +393,7 @@ func TestSessionProcessor_InvalidCookie_Clears(t *testing.T) {
 }
 
 func TestSessionProcessor_ValidCookie_AttachesSession_NoChange_NoSetCookie(t *testing.T) {
-	p, sc := newTestSessionProcessor(t)
-	p.MaxAge = time.Hour
-	p.ExtendThreshold = 10 * time.Second
+	p, sc := newTestSessionProcessor(t, WithMaxAge(time.Hour), WithExtendThreshold(10*time.Second))
 
 	now := time.Now().Truncate(time.Second)
 	expires := now.Add(1 * time.Hour)
@@ -445,9 +439,7 @@ func TestSessionProcessor_ValidCookie_AttachesSession_NoChange_NoSetCookie(t *te
 func TestSessionProcessor_Extends_SetsCookie(t *testing.T) {
 	// Use a comfortably-large MaxAge and a high ExtendThreshold to force extension,
 	// while keeping expiry far enough in the future to avoid Max-Age rounding to 0.
-	p, sc := newTestSessionProcessor(t)
-	p.MaxAge = 24 * time.Hour
-	p.ExtendThreshold = 24 * time.Hour
+	p, sc := newTestSessionProcessor(t, WithMaxAge(24*time.Hour), WithExtendThreshold(24*time.Hour))
 
 	// Expires relatively soon vs ExtendThreshold, so it will be extended.
 	expires := time.Now().Add(30 * time.Minute).Truncate(time.Second)
@@ -480,9 +472,7 @@ func TestSessionProcessor_Extends_SetsCookie(t *testing.T) {
 }
 
 func TestSessionProcessor_PayloadChange_SetsCookie(t *testing.T) {
-	p, sc := newTestSessionProcessor(t)
-	p.MaxAge = time.Hour
-	p.ExtendThreshold = 1 * time.Second // not extended
+	p, sc := newTestSessionProcessor(t, WithMaxAge(time.Hour), WithExtendThreshold(1*time.Second)) // not extended
 
 	encodedValue, _ := cbor.Marshal("b")
 	expires := time.Now().Add(30 * time.Minute).Truncate(time.Second)
@@ -521,9 +511,7 @@ func TestSessionProcessor_PayloadChange_SetsCookie(t *testing.T) {
 }
 
 func TestSessionProcessor_KVSet_PersistsInCookieRoundTrip(t *testing.T) {
-	p, sc := newTestSessionProcessor(t)
-	p.MaxAge = time.Hour
-	p.ExtendThreshold = 1 * time.Second // not extended
+	p, sc := newTestSessionProcessor(t, WithMaxAge(time.Hour), WithExtendThreshold(1*time.Second)) // not extended
 
 	expires := time.Now().Add(30 * time.Minute).Truncate(time.Second)
 	sess := &session[cbor.RawMessage]{sessionData: &sessionData[cbor.RawMessage]{ID: "x", Username: "u", Expires: expires, Period: 1800, KV: map[string]cbor.RawMessage{}}}
@@ -586,9 +574,7 @@ func TestSessionProcessor_KVSet_PersistsInCookieRoundTrip(t *testing.T) {
 }
 
 func TestSessionProcessor_NoCookie_LoginThenSet_PersistsKVAcrossRoundTrip(t *testing.T) {
-	p, _ := newTestSessionProcessor(t)
-	p.MaxAge = time.Hour
-	p.ExtendThreshold = 1 * time.Second // not extended
+	p, _ := newTestSessionProcessor(t, WithMaxAge(time.Hour), WithExtendThreshold(1*time.Second)) // not extended
 
 	// First request has no cookie.
 	r1 := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
@@ -649,9 +635,7 @@ func TestSessionProcessor_NoCookie_LoginThenSet_PersistsKVAcrossRoundTrip(t *tes
 }
 
 func TestSessionProcessor_ExpiredSession_Clears(t *testing.T) {
-	p, sc := newTestSessionProcessor(t)
-	p.MaxAge = time.Hour
-	p.ExtendThreshold = 10 * time.Second
+	p, sc := newTestSessionProcessor(t, WithMaxAge(time.Hour), WithExtendThreshold(10*time.Second))
 
 	sess := &session[cbor.RawMessage]{sessionData: &sessionData[cbor.RawMessage]{ID: "x", Username: "u", Expires: time.Now().Add(-time.Second).Truncate(time.Second), Period: 3600, KV: map[string]cbor.RawMessage{}}}
 	ck := encodeSession(t, sc, sess.sessionData, 3600)
@@ -693,13 +677,13 @@ func encodeSession(t *testing.T, sc SecureCookie[sessionData[cbor.RawMessage]], 
 	return ck
 }
 
-func newTestSessionProcessor(t *testing.T) (*SessionProcessor[cbor.RawMessage], SecureCookie[sessionData[cbor.RawMessage]]) {
+func newTestSessionProcessor(t *testing.T, opts ...SessionProcessorOption) (*SessionProcessor[cbor.RawMessage], SecureCookie[sessionData[cbor.RawMessage]]) {
 	t.Helper()
 	keys := map[string][]byte{"a": make([]byte, DefaultAEADKeysize)}
 	if _, err := rand.Read(keys["a"]); err != nil {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
-	p, err := NewSessionProcessor("OSS", "a", keys)
+	p, err := NewSessionProcessor("OSS", "a", keys, opts...)
 	if err != nil {
 		t.Fatalf("NewSessionProcessor: %v", err)
 	}
@@ -737,7 +721,7 @@ func TestNewSessionProcessor_WithCustomOptions(t *testing.T) {
 	proc, err := NewCustomSessionProcessor[cbor.RawMessage](
 		"OSS", "a", keys,
 		marshal, unmarshal,
-		WithAEAD(newAESGCMAEAD),
+		WithCookieOptions(WithAEAD(newAESGCMAEAD)),
 	)
 	if err != nil {
 		t.Fatalf("NewSessionProcessor: %v", err)

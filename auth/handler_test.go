@@ -23,7 +23,6 @@ import (
 func TestAuthHandler_Login(t *testing.T) {
 	// Setup keys and state manager
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
 	reg := NewRegistry()
 
 	// Setup fake provider endpoint
@@ -52,7 +51,10 @@ func TestAuthHandler_Login(t *testing.T) {
 	reg.RegisterOAuth2Provider("test-provider", conf)
 
 	// Create Handler
-	h := NewHandler(reg, cookie, "http://example.com", "/auth")
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// 1. Test Login Redirect
 	w := httptest.NewRecorder()
@@ -120,7 +122,10 @@ func TestAuthHandler_OpenRedirect(t *testing.T) {
 	reg := NewRegistry()
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{AuthURL: "http://provider", TokenURL: "http://provider"}})
 
-	h := NewHandler(reg, cookie, "http://example.com", "/auth")
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Attempt open redirect
 	w := httptest.NewRecorder()
@@ -140,10 +145,12 @@ func TestAuthHandler_OpenRedirect(t *testing.T) {
 
 func TestAuthHandler_Callback_Errors(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
 	reg := NewRegistry()
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{}) // Register dummy provider
-	h := NewHandler(reg, cookie, "http://example.com", "/auth")
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// 1. Provider Error
 	w := httptest.NewRecorder()
@@ -168,7 +175,10 @@ func TestAuthHandler_StateEviction(t *testing.T) {
 	reg := NewRegistry()
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{AuthURL: "http://provider"}})
 
-	h := NewHandler(reg, cookie, "http://example.com", "/auth")
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Initiate 4 logins
 	var cookies []*http.Cookie
@@ -197,7 +207,10 @@ func TestAuthHandler_StateExpiry(t *testing.T) {
 	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
 	reg := NewRegistry()
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{})
-	h := NewHandler(reg, cookie, "http://example.com", "/auth")
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Manually create expired state in cookie
 	expiredState := AuthState{
@@ -278,7 +291,10 @@ func TestAuthHandler_OIDCNonceMismatch(t *testing.T) {
 
 	keys := map[string][]byte{"1": make([]byte, 32)}
 	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
-	h := NewHandler(reg, cookie, "http://example.com", "/auth")
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// 1. Setup Cookie with expected nonce
 	expectedNonce := "EXPECTED_NONCE"
@@ -307,7 +323,6 @@ func TestAuthHandler_OIDCNonceMismatch(t *testing.T) {
 
 func TestAuthHandler_PreAuthFailure(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
 	reg := NewRegistry()
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{})
 
@@ -316,7 +331,10 @@ func TestAuthHandler_PreAuthFailure(t *testing.T) {
 		return params, endpoint.Error(http.StatusForbidden, "blocked by pre-auth", nil)
 	}
 
-	h := NewHandler(reg, cookie, "http://example.com", "/auth", WithPreAuthHook(failPreAuth))
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth", WithPreAuthHook(failPreAuth))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/auth/login/test", nil)
@@ -349,7 +367,10 @@ func TestAuthHandler_SuccessHookFailure(t *testing.T) {
 		return nil, endpoint.Error(http.StatusTeapot, "simulated failure", nil)
 	}
 
-	h := NewHandler(reg, cookie, "http://example.com", "/auth", WithSuccessEndpoint(successEndpoint))
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth", WithSuccessEndpoint(successEndpoint))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Setup valid state
 	state := "state123"
@@ -376,7 +397,10 @@ func TestAuthHandler_PKCEGeneration(t *testing.T) {
 	// PKCE enabled by default in RegisterOAuth2Provider
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{AuthURL: "http://provider/auth"}})
 
-	h := NewHandler(reg, cookie, "http://example.com", "/auth")
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/auth/login/test", nil)
@@ -402,20 +426,21 @@ func TestAuthHandler_PKCEGeneration(t *testing.T) {
 
 func TestAuthHandler_CookieSecurity(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	// We need to verify that NewHandler doesn't override secure settings passed to it,
-	// but here we are passing the cookie *instance* to NewHandler.
-	// So we test that the cookie instance *we create* behaves as expected when used by Handler.
-
-	// Actually, StateManager (internal) used to handle this. Now Handler calls h.cookie.Encode().
-	// So the security depends on how we initialized the cookie passed to NewHandler.
-	// Let's verify that the handler *uses* the cookie correctly.
-
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys,
-		middleware.WithCookieOptions("/", "example.com", true, true, http.SameSiteLaxMode))
 
 	reg := NewRegistry()
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{})
-	h := NewHandler(reg, cookie, "https://example.com", "/auth")
+	// Set non-default values to ensure options are being applied
+	h, err := NewHandler(reg, "auth-state", "1", keys, "https://example.com", "/auth",
+		WithCookieOptions(
+			middleware.WithPath("/custom-path"),
+			middleware.WithDomain("custom.example.com"),
+			middleware.WithSecure(false),
+			middleware.WithSameSite(http.SameSiteStrictMode),
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/auth/login/test", nil)
@@ -427,22 +452,30 @@ func TestAuthHandler_CookieSecurity(t *testing.T) {
 	}
 	c := cookies[0]
 
-	if !c.Secure {
-		t.Error("expected Secure cookie")
+	if c.Path != "/custom-path" {
+		t.Errorf("expected Path=/custom-path, got %q", c.Path)
+	}
+	if c.Domain != "custom.example.com" {
+		t.Errorf("expected Domain=custom.example.com, got %q", c.Domain)
+	}
+	if c.Secure {
+		t.Error("expected non-Secure cookie")
 	}
 	if !c.HttpOnly {
 		t.Error("expected HttpOnly cookie")
 	}
-	if c.SameSite != http.SameSiteLaxMode {
-		t.Error("expected SameSite=Lax")
+	if c.SameSite != http.SameSiteStrictMode {
+		t.Error("expected SameSite=Strict")
 	}
 }
 
 func TestAuthHandler_UnknownProvider(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
 	reg := NewRegistry()
-	h := NewHandler(reg, cookie, "http://example.com", "/auth")
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// 1. Login with unknown provider
 	w := httptest.NewRecorder()
@@ -467,7 +500,6 @@ func TestAuthHandler_UnknownProvider(t *testing.T) {
 
 func TestAuthHandler_AppDataPersistence(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
 	reg := NewRegistry()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -479,10 +511,13 @@ func TestAuthHandler_AppDataPersistence(t *testing.T) {
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{TokenURL: srv.URL}})
 
 	var capturedAppData []byte
-	h := NewHandler(reg, cookie, "http://example.com", "/auth", WithSuccessEndpoint(func(w http.ResponseWriter, r *http.Request, params *SuccessParams) (endpoint.Renderer, error) {
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth", WithSuccessEndpoint(func(w http.ResponseWriter, r *http.Request, params *SuccessParams) (endpoint.Renderer, error) {
 		capturedAppData = params.AppData
 		return &endpoint.RedirectRenderer{URL: "/"}, nil
 	}))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Complex app data
 	complexData := "user_id=123&role=admin with spaces/and/slashes"
@@ -514,7 +549,6 @@ func TestAuthHandler_AppDataPersistence(t *testing.T) {
 
 func TestAuthHandler_PKCE_Disabled(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
 	reg := NewRegistry()
 
 	conf := &oauth2.Config{
@@ -524,7 +558,10 @@ func TestAuthHandler_PKCE_Disabled(t *testing.T) {
 	p.SetPKCE(false)
 	reg.Register(p)
 
-	h := NewHandler(reg, cookie, "http://example.com", "/auth")
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/auth/login/no-pkce", nil)
@@ -538,11 +575,13 @@ func TestAuthHandler_PKCE_Disabled(t *testing.T) {
 
 func TestAuthHandler_AppDataMaxLength(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
 	reg := NewRegistry()
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{AuthURL: "http://provider/auth"}})
 
-	h := NewHandler(reg, cookie, "http://example.com", "/auth")
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Test with exactly 512 bytes - should pass
 	okData := make([]byte, 512)
@@ -577,4 +616,3 @@ func TestAuthHandler_AppDataMaxLength(t *testing.T) {
 		t.Errorf("expected 400 for 513 bytes, got %d", w2.Result().StatusCode)
 	}
 }
-

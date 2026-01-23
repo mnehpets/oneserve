@@ -337,30 +337,68 @@ type SessionProcessor[Raw ByteSlice] struct {
 	unmarshal       func([]byte, any) error
 }
 
+// SessionProcessorOption configures the SessionProcessor.
+type SessionProcessorOption func(*sessionProcessorConfig)
+
+type sessionProcessorConfig struct {
+	cookieOptions   []SecureCookieOption
+	maxAge          time.Duration
+	extendThreshold time.Duration
+}
+
+// WithCookieOptions adds SecureCookieOptions to the session processor configuration.
+func WithCookieOptions(opts ...SecureCookieOption) SessionProcessorOption {
+	return func(c *sessionProcessorConfig) {
+		c.cookieOptions = append(c.cookieOptions, opts...)
+	}
+}
+
+// WithMaxAge sets the session max age.
+func WithMaxAge(d time.Duration) SessionProcessorOption {
+	return func(c *sessionProcessorConfig) {
+		c.maxAge = d
+	}
+}
+
+// WithExtendThreshold sets the session extension threshold.
+func WithExtendThreshold(d time.Duration) SessionProcessorOption {
+	return func(c *sessionProcessorConfig) {
+		c.extendThreshold = d
+	}
+}
+
 // NewCustomSessionProcessor returns a SessionProcessor with custom marshal/unmarshal.
-func NewCustomSessionProcessor[Raw ByteSlice](cookieName, keyID string, keys map[string][]byte, marshal func(any) ([]byte, error), unmarshal func([]byte, any) error, opts ...SecureCookieOption) (*SessionProcessor[Raw], error) {
+func NewCustomSessionProcessor[Raw ByteSlice](cookieName, keyID string, keys map[string][]byte, marshal func(any) ([]byte, error), unmarshal func([]byte, any) error, opts ...SessionProcessorOption) (*SessionProcessor[Raw], error) {
+	cfg := sessionProcessorConfig{
+		maxAge:          DefaultSessionPeriod,
+		extendThreshold: DefaultSessionRevalidationExtendThreshold,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	cookie, err := NewCustomSecureCookie[sessionData[Raw]](
 		cookieName,
 		keyID,
 		keys,
 		marshal,
 		unmarshal,
-		opts...,
+		cfg.cookieOptions...,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &SessionProcessor[Raw]{
 		cookie:          cookie,
-		MaxAge:          DefaultSessionPeriod,
-		ExtendThreshold: DefaultSessionRevalidationExtendThreshold,
+		MaxAge:          cfg.maxAge,
+		ExtendThreshold: cfg.extendThreshold,
 		marshal:         marshal,
 		unmarshal:       unmarshal,
 	}, nil
 }
 
 // NewSessionProcessor returns a SessionProcessor with default configuration (CBOR).
-func NewSessionProcessor(cookieName, keyID string, keys map[string][]byte, opts ...SecureCookieOption) (*SessionProcessor[cbor.RawMessage], error) {
+func NewSessionProcessor(cookieName, keyID string, keys map[string][]byte, opts ...SessionProcessorOption) (*SessionProcessor[cbor.RawMessage], error) {
 	return NewCustomSessionProcessor[cbor.RawMessage](cookieName, keyID, keys, cbor.Marshal, cbor.Unmarshal, opts...)
 }
 

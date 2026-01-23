@@ -178,17 +178,33 @@ type secureCookieConfig struct {
 	path     string
 	domain   string
 	secure   bool
-	httpOnly bool
 	sameSite http.SameSite
 }
 
-// WithCookieOptions configures the session cookie attributes.
-func WithCookieOptions(path string, domain string, secure bool, httpOnly bool, sameSite http.SameSite) SecureCookieOption {
+// WithPath configures the cookie path.
+func WithPath(path string) SecureCookieOption {
 	return func(c *secureCookieConfig) {
 		c.path = path
+	}
+}
+
+// WithDomain configures the cookie domain.
+func WithDomain(domain string) SecureCookieOption {
+	return func(c *secureCookieConfig) {
 		c.domain = domain
+	}
+}
+
+// WithSecure configures the cookie secure flag.
+func WithSecure(secure bool) SecureCookieOption {
+	return func(c *secureCookieConfig) {
 		c.secure = secure
-		c.httpOnly = httpOnly
+	}
+}
+
+// WithSameSite configures the cookie sameSite attribute.
+func WithSameSite(sameSite http.SameSite) SecureCookieOption {
+	return func(c *secureCookieConfig) {
 		c.sameSite = sameSite
 	}
 }
@@ -207,7 +223,6 @@ func NewCustomSecureCookie[T any](cookieName string, keyID string, keys map[stri
 		domain:   "",
 		path:     "/",
 		secure:   true,
-		httpOnly: true,
 		sameSite: http.SameSiteLaxMode,
 	}
 	for _, opt := range opts {
@@ -274,7 +289,7 @@ func (sc *SecureCookieAEAD[T]) Encode(plain T, maxAge int) (*http.Cookie, error)
 		Domain:   sc.cfg.domain,
 		MaxAge:   maxAge,
 		Secure:   sc.cfg.secure,
-		HttpOnly: sc.cfg.httpOnly,
+		HttpOnly: true,
 		SameSite: sc.cfg.sameSite,
 		Expires:  time.Now().Add(time.Duration(maxAge) * time.Second),
 	}, nil
@@ -311,7 +326,7 @@ func (sc *SecureCookieAEAD[T]) Clear() *http.Cookie {
 		Name:     sc.CookieName,
 		Domain:   sc.cfg.domain,
 		Path:     sc.cfg.path,
-		HttpOnly: sc.cfg.httpOnly,
+		HttpOnly: true,
 		Secure:   sc.cfg.secure,
 		SameSite: sc.cfg.sameSite,
 		Value:    "",
