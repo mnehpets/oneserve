@@ -40,10 +40,7 @@ func GetVerifiedEmail(token *oidc.IDToken) (string, bool) {
 	if token == nil {
 		return "", false
 	}
-	var claims struct {
-		Email         string `json:"email"`
-		EmailVerified bool   `json:"email_verified"`
-	}
+	var claims oidc.UserInfo
 	if err := token.Claims(&claims); err != nil {
 		return "", false
 	}
