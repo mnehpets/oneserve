@@ -253,7 +253,8 @@ The system MUST provide a handler type for HTTP endpoints that separates request
 - **AND** the `SecureCookie` MUST support authenticated encryption (e.g., ChaCha20-Poly1305) to ensure confidentiality and integrity.
 - **AND** the `SecureCookie` MUST support serializing arbitrary Go types into the cookie value (e.g., using CBOR or JSON).
 - **AND** the `SecureCookie` MUST allow configuring default cookie attributes (Name, Domain, Path, Secure, HttpOnly, SameSite).
-- **AND** the `SecureCookie` MUST provide an `Encode(value T, maxAge int) (*http.Cookie, error)` method.
-- **AND** the `SecureCookie` MUST provide a `Decode(cookie *http.Cookie) (T, error)` method.
+- **AND** the `SecureCookie` MUST provide an `Encode(value any, maxAge int) (*http.Cookie, error)` method.
+- **AND** the `SecureCookie` MUST provide a `Decode(cookie *http.Cookie, v any) error` method.
 - **AND** the `SecureCookie` MUST provide a `Clear() *http.Cookie` method to generate a deletion cookie.
+- **AND** the `SecureCookie` MUST provide a `Name() string` method to retrieve the configured cookie name.
 
