@@ -32,7 +32,7 @@ func TestSecureCookieAEAD_RoundTrip(t *testing.T) {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
 
-	sc, err := NewSecureCookie[testPayload]("sc", "a", keys,
+	sc, err := NewSecureCookie("sc", "a", keys,
 		WithPath("/"), WithDomain("example.com"), WithSecure(false), WithSameSite(http.SameSiteNoneMode))
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD: %v", err)
@@ -69,7 +69,8 @@ func TestSecureCookieAEAD_RoundTrip(t *testing.T) {
 		t.Fatalf("cookie value empty")
 	}
 
-	got, err := sc.Decode(ck)
+	var got testPayload
+	err = sc.Decode(ck, &got)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -90,7 +91,7 @@ func TestSecureCookieAEAD_Encode_UsesCurrentKeyID(t *testing.T) {
 		t.Fatalf("rand.Read(b): %v", err)
 	}
 
-	sc, err := NewSecureCookie[testPayload]("sc", "b", keys)
+	sc, err := NewSecureCookie("sc", "b", keys)
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD: %v", err)
 	}
@@ -113,7 +114,7 @@ func TestSecureCookieAEAD_Clear_SetsCookieAttributes(t *testing.T) {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
 
-	sc, err := NewSecureCookie[testPayload]("sc", "a", keys)
+	sc, err := NewSecureCookie("sc", "a", keys)
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD: %v", err)
 	}
@@ -141,11 +142,12 @@ func TestSecureCookieAEAD_Decode_NilCookie_IsFormatError(t *testing.T) {
 	if _, err := rand.Read(keys["a"]); err != nil {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
-	sc, err := NewSecureCookie[testPayload]("sc", "a", keys)
+	sc, err := NewSecureCookie("sc", "a", keys)
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD: %v", err)
 	}
-	if _, err := sc.Decode(nil); err != ErrCookieFormat {
+	var v testPayload
+	if err := sc.Decode(nil, &v); err != ErrCookieFormat {
 		t.Fatalf("Decode(nil): got %v want %v", err, ErrCookieFormat)
 	}
 }
@@ -155,11 +157,12 @@ func TestSecureCookieAEAD_Decode_UnknownKeyID_IsInvalid(t *testing.T) {
 	if _, err := rand.Read(keys["a"]); err != nil {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
-	sc, err := NewSecureCookie[testPayload]("sc", "a", keys)
+	sc, err := NewSecureCookie("sc", "a", keys)
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD: %v", err)
 	}
-	if _, err := sc.Decode(&http.Cookie{Name: "sc", Value: "nope.deadbeef"}); err != ErrCookieInvalid {
+	var v testPayload
+	if err := sc.Decode(&http.Cookie{Name: "sc", Value: "nope.deadbeef"}, &v); err != ErrCookieInvalid {
 		t.Fatalf("Decode(unknown keyID): got %v want %v", err, ErrCookieInvalid)
 	}
 }
@@ -176,11 +179,11 @@ func TestSecureCookieAEAD_Rotation_OldKeyStillDecodes(t *testing.T) {
 		t.Fatalf("rand.Read(new): %v", err)
 	}
 
-	scOld, err := NewSecureCookie[testPayload]("sc", "old", keys)
+	scOld, err := NewSecureCookie("sc", "old", keys)
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD(old): %v", err)
 	}
-	scNew, err := NewSecureCookie[testPayload]("sc", "new", keys)
+	scNew, err := NewSecureCookie("sc", "new", keys)
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD(new): %v", err)
 	}
@@ -191,7 +194,8 @@ func TestSecureCookieAEAD_Rotation_OldKeyStillDecodes(t *testing.T) {
 		t.Fatalf("Encode(old): %v", err)
 	}
 
-	got, err := scNew.Decode(ck)
+	var got testPayload
+	err = scNew.Decode(ck, &got)
 	if err != nil {
 		t.Fatalf("Decode(with new instance): %v", err)
 	}
@@ -208,7 +212,7 @@ func TestSecureCookieAEAD_TamperRejected(t *testing.T) {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
 
-	sc, err := NewSecureCookie[testPayload]("sc", "a", keys)
+	sc, err := NewSecureCookie("sc", "a", keys)
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD: %v", err)
 	}
@@ -223,7 +227,8 @@ func TestSecureCookieAEAD_TamperRejected(t *testing.T) {
 	v[len(v)-3] ^= 0x01
 	ck2 := &http.Cookie{Name: ck.Name, Value: string(v), Domain: ck.Domain, Path: ck.Path}
 
-	if _, err := sc.Decode(ck2); err == nil {
+	var got testPayload
+	if err := sc.Decode(ck2, &got); err == nil {
 		t.Fatalf("Decode(tampered): expected error")
 	} else if err != ErrCookieInvalid && err != ErrCookieFormat {
 		// Depending on the flip location it might become invalid base64.
@@ -239,12 +244,12 @@ func TestSecureCookieAEAD_AADMismatchRejected(t *testing.T) {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
 
-	sc1, err := NewSecureCookie[testPayload]("sc", "a", keys,
+	sc1, err := NewSecureCookie("sc", "a", keys,
 		WithPath("/"), WithDomain("example.com"), WithSecure(false), WithSameSite(http.SameSiteLaxMode))
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD(sc1): %v", err)
 	}
-	sc2, err := NewSecureCookie[testPayload]("sc", "a", keys,
+	sc2, err := NewSecureCookie("sc", "a", keys,
 		WithPath("/"), WithDomain("other.com"), WithSecure(false), WithSameSite(http.SameSiteLaxMode))
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD(sc2): %v", err)
@@ -254,7 +259,8 @@ func TestSecureCookieAEAD_AADMismatchRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	if _, err := sc2.Decode(ck); err != ErrCookieInvalid {
+	var got testPayload
+	if err := sc2.Decode(ck, &got); err != ErrCookieInvalid {
 		t.Fatalf("Decode(AAD mismatch): got %v want %v", err, ErrCookieInvalid)
 	}
 }
@@ -265,16 +271,16 @@ func TestNewSecureCookieAEAD_Validation(t *testing.T) {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
 
-	if _, err := NewSecureCookie[testPayload]("sc", "missing", map[string][]byte{"a": key}); err == nil {
+	if _, err := NewSecureCookie("sc", "missing", map[string][]byte{"a": key}); err == nil {
 		t.Fatalf("expected error for missing keyID")
 	}
 
-	if _, err := NewSecureCookie[testPayload]("sc", "a", nil); err == nil {
+	if _, err := NewSecureCookie("sc", "a", nil); err == nil {
 		t.Fatalf("expected error for nil keys")
 	}
 
 	badKeys := map[string][]byte{"a": key, "b": make([]byte, DefaultAEADKeysize-1)}
-	if _, err := NewSecureCookie[testPayload]("sc", "a", badKeys); err == nil {
+	if _, err := NewSecureCookie("sc", "a", badKeys); err == nil {
 		t.Fatalf("expected error for inconsistent key lengths")
 	}
 }
@@ -286,11 +292,12 @@ func TestSecureCookieAEAD_NilNewAEAD_IsConfigError(t *testing.T) {
 	}
 
 	// Deliberately bypass constructor to ensure methods don't panic.
-	sc := &SecureCookieAEAD[testPayload]{CookieName: "sc"}
+	sc := &SecureCookieAEAD{name: "sc"}
 	if _, err := sc.Encode(testPayload{Msg: "x", Num: 5}, 3600); err != ErrCookieConfig {
 		t.Fatalf("Encode: got %v want %v", err, ErrCookieConfig)
 	}
-	if _, err := sc.Decode(&http.Cookie{Name: "sc", Value: "a.deadbeef"}); err != ErrCookieConfig {
+	var got testPayload
+	if err := sc.Decode(&http.Cookie{Name: "sc", Value: "a.deadbeef"}, &got); err != ErrCookieConfig {
 		t.Fatalf("Decode: got %v want %v", err, ErrCookieConfig)
 	}
 }
@@ -301,7 +308,7 @@ func TestSecureCookieAEAD_CustomMarshal(t *testing.T) {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
 
-	sc, err := NewCustomSecureCookie[testPayload]("sc", "a", keys, json.Marshal, json.Unmarshal)
+	sc, err := NewSecureCookie("sc", "a", keys, WithMarshalUnmarshal(json.Marshal, json.Unmarshal))
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD(custom): %v", err)
 	}
@@ -311,7 +318,8 @@ func TestSecureCookieAEAD_CustomMarshal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode(custom): %v", err)
 	}
-	got, err := sc.Decode(ck)
+	var got testPayload
+	err = sc.Decode(ck, &got)
 	if err != nil {
 		t.Fatalf("Decode(custom): %v", err)
 	}
@@ -326,7 +334,7 @@ func TestSecureCookieAEAD_CustomAEAD_AESGCM(t *testing.T) {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
 
-	sc, err := NewCustomSecureCookie[testPayload]("sc", "a", keys, json.Marshal, json.Unmarshal, WithAEAD(newAESGCMAEAD))
+	sc, err := NewSecureCookie("sc", "a", keys, WithMarshalUnmarshal(json.Marshal, json.Unmarshal), WithAEAD(newAESGCMAEAD))
 	if err != nil {
 		t.Fatalf("NewSecureCookieAEAD(custom AEAD): %v", err)
 	}
@@ -336,7 +344,8 @@ func TestSecureCookieAEAD_CustomAEAD_AESGCM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	got, err := sc.Decode(ck)
+	var got testPayload
+	err = sc.Decode(ck, &got)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -349,7 +358,7 @@ func TestSecureCookieAEAD_CustomAEAD_AESGCM(t *testing.T) {
 	// Last two characters may be base64 padding, so flip third-last.
 	v[len(v)-3] ^= 0x01
 	ck2 := &http.Cookie{Name: ck.Name, Value: string(v), Domain: ck.Domain, Path: ck.Path}
-	if _, err := sc.Decode(ck2); err == nil {
+	if err := sc.Decode(ck2, &got); err == nil {
 		t.Fatalf("Decode(tampered): expected error")
 	}
 }

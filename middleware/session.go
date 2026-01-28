@@ -330,7 +330,7 @@ func SessionFromContext(ctx context.Context) (Session, bool) {
 //   - MaxAge: if > 0 and session.MaxAge is 0, initialize session MaxAge/Expires.
 //   - ExtendThreshold: extend only when time remaining is less than this.
 type SessionProcessor[Raw ByteSlice] struct {
-	cookie          SecureCookie[sessionData[Raw]]
+	cookie          SecureCookie
 	MaxAge          time.Duration
 	ExtendThreshold time.Duration
 	marshal         func(any) ([]byte, error)
@@ -340,13 +340,25 @@ type SessionProcessor[Raw ByteSlice] struct {
 // SessionProcessorOption configures the SessionProcessor.
 type SessionProcessorOption func(*sessionProcessorConfig)
 
+// We keep the configuration separate from SessionProcessor so that
+// it doesn't have the `Raw` type parameter. This means that the
+// option functions can be shared between generic NewCustomSessionProcessor
+// and non-generic NewSessionProcessor,
 type sessionProcessorConfig struct {
+	cookieName      string
 	cookieOptions   []SecureCookieOption
 	maxAge          time.Duration
 	extendThreshold time.Duration
 }
 
-// WithCookieOptions adds SecureCookieOptions to the session processor configuration.
+// WithCookieName sets the name of the secure cookie where the session data is stored.
+func WithCookieName(name string) SessionProcessorOption {
+	return func(c *sessionProcessorConfig) {
+		c.cookieName = name
+	}
+}
+
+// WithCookieOptions adds SecureCookieOptions to secure cookie configuration.
 func WithCookieOptions(opts ...SecureCookieOption) SessionProcessorOption {
 	return func(c *sessionProcessorConfig) {
 		c.cookieOptions = append(c.cookieOptions, opts...)
@@ -368,8 +380,9 @@ func WithExtendThreshold(d time.Duration) SessionProcessorOption {
 }
 
 // NewCustomSessionProcessor returns a SessionProcessor with custom marshal/unmarshal.
-func NewCustomSessionProcessor[Raw ByteSlice](cookieName, keyID string, keys map[string][]byte, marshal func(any) ([]byte, error), unmarshal func([]byte, any) error, opts ...SessionProcessorOption) (*SessionProcessor[Raw], error) {
+func NewCustomSessionProcessor[Raw ByteSlice](keyID string, keys map[string][]byte, marshal func(any) ([]byte, error), unmarshal func([]byte, any) error, opts ...SessionProcessorOption) (*SessionProcessor[Raw], error) {
 	cfg := sessionProcessorConfig{
+		cookieName:      DefaultCookieName,
 		maxAge:          DefaultSessionPeriod,
 		extendThreshold: DefaultSessionRevalidationExtendThreshold,
 	}
@@ -377,13 +390,15 @@ func NewCustomSessionProcessor[Raw ByteSlice](cookieName, keyID string, keys map
 		opt(&cfg)
 	}
 
-	cookie, err := NewCustomSecureCookie[sessionData[Raw]](
-		cookieName,
+	optsWithMarshaling := append([]SecureCookieOption{
+		WithMarshalUnmarshal(marshal, unmarshal),
+	}, cfg.cookieOptions...)
+
+	cookie, err := NewSecureCookie(
+		cfg.cookieName,
 		keyID,
 		keys,
-		marshal,
-		unmarshal,
-		cfg.cookieOptions...,
+		optsWithMarshaling...,
 	)
 	if err != nil {
 		return nil, err
@@ -397,9 +412,9 @@ func NewCustomSessionProcessor[Raw ByteSlice](cookieName, keyID string, keys map
 	}, nil
 }
 
-// NewSessionProcessor returns a SessionProcessor with default configuration (CBOR).
-func NewSessionProcessor(cookieName, keyID string, keys map[string][]byte, opts ...SessionProcessorOption) (*SessionProcessor[cbor.RawMessage], error) {
-	return NewCustomSessionProcessor[cbor.RawMessage](cookieName, keyID, keys, cbor.Marshal, cbor.Unmarshal, opts...)
+// NewSessionProcessor returns a SessionProcessor with default marshal/unmarshal of CBOR.
+func NewSessionProcessor(keyID string, keys map[string][]byte, opts ...SessionProcessorOption) (*SessionProcessor[cbor.RawMessage], error) {
+	return NewCustomSessionProcessor[cbor.RawMessage](keyID, keys, cbor.Marshal, cbor.Unmarshal, opts...)
 }
 
 // Process implements endpoint.Processor.
@@ -420,7 +435,8 @@ func (p *SessionProcessor[Raw]) Process(w http.ResponseWriter, r *http.Request, 
 	c, err := r.Cookie(p.cookie.Name())
 	if err == nil {
 		// We have a cookie, try to decode it.
-		sessData, err := p.cookie.Decode(c)
+		var sessData sessionData[Raw]
+		err = p.cookie.Decode(c, &sessData)
 		if err == nil {
 			// Make sure KV is initialized so downstream code can safely write to it.
 			if sessData.KV == nil {

@@ -127,8 +127,7 @@ func main() {
 
 	// Create the session middleware.
 	sessionProcessor, err := middleware.NewSessionProcessor(
-		"os_example", // Cookie name
-		"1",          // Key ID
+		"1", // Key ID
 		map[string][]byte{
 			"1": []byte("0123456789ABCDEF0123456789ABCDEF"), // 32-byte key for chacha20poly1305
 		}, // Keys

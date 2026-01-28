@@ -74,7 +74,7 @@ type AuthHandler struct {
 	basePath  string
 
 	// State Management
-	cookie middleware.SecureCookie[AuthStateMap]
+	cookie middleware.SecureCookie
 
 	preAuth PreAuthHook
 	success SuccessEndpoint
@@ -149,7 +149,7 @@ func NewHandler(registry *Registry, cookieName, keyID string, keys map[string][]
 		opt(h)
 	}
 
-	cookie, err := middleware.NewSecureCookie[AuthStateMap](cookieName, keyID, keys, h.cookieOptions...)
+	cookie, err := middleware.NewSecureCookie(cookieName, keyID, keys, h.cookieOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +325,7 @@ func (h *AuthHandler) addState(w http.ResponseWriter, r *http.Request, state str
 	var err error
 
 	if c != nil {
-		states, err = h.cookie.Decode(c)
+		err = h.cookie.Decode(c, &states)
 		if err != nil {
 			states = make(AuthStateMap)
 		}
@@ -376,7 +376,8 @@ func (h *AuthHandler) popState(w http.ResponseWriter, r *http.Request, state str
 		return AuthState{}, err
 	}
 
-	states, err := h.cookie.Decode(c)
+	var states AuthStateMap
+	err = h.cookie.Decode(c, &states)
 	if err != nil {
 		return AuthState{}, err
 	}
