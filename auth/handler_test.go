@@ -118,7 +118,7 @@ func TestAuthHandler_Login(t *testing.T) {
 
 func TestAuthHandler_OpenRedirect(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
+	cookie, _ := middleware.NewSecureCookie("auth-state", "1", keys)
 	reg := NewRegistry()
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{AuthURL: "http://provider", TokenURL: "http://provider"}})
 
@@ -134,7 +134,8 @@ func TestAuthHandler_OpenRedirect(t *testing.T) {
 
 	// Check cookie state
 	c := w.Result().Cookies()[0]
-	states, _ := cookie.Decode(c)
+	var states AuthStateMap
+	_ = cookie.Decode(c, &states)
 	// Iterate to find the single state
 	for _, s := range states {
 		if s.AuthParams.NextURL != "/" {
@@ -171,7 +172,7 @@ func TestAuthHandler_Callback_Errors(t *testing.T) {
 
 func TestAuthHandler_StateEviction(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
+	cookie, _ := middleware.NewSecureCookie("auth-state", "1", keys)
 	reg := NewRegistry()
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{AuthURL: "http://provider"}})
 
@@ -196,7 +197,8 @@ func TestAuthHandler_StateEviction(t *testing.T) {
 	}
 
 	// Decode final cookie
-	states, _ := cookie.Decode(lastCookie)
+	var states AuthStateMap
+	_ = cookie.Decode(lastCookie, &states)
 	if len(states) != 3 {
 		t.Errorf("expected 3 states (max), got %d", len(states))
 	}
@@ -204,7 +206,7 @@ func TestAuthHandler_StateEviction(t *testing.T) {
 
 func TestAuthHandler_StateExpiry(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
+	cookie, _ := middleware.NewSecureCookie("auth-state", "1", keys)
 	reg := NewRegistry()
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{})
 	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
@@ -290,7 +292,7 @@ func TestAuthHandler_OIDCNonceMismatch(t *testing.T) {
 	}
 
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
+	cookie, _ := middleware.NewSecureCookie("auth-state", "1", keys)
 	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth")
 	if err != nil {
 		t.Fatal(err)
@@ -347,7 +349,7 @@ func TestAuthHandler_PreAuthFailure(t *testing.T) {
 
 func TestAuthHandler_SuccessHookFailure(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
+	cookie, _ := middleware.NewSecureCookie("auth-state", "1", keys)
 	reg := NewRegistry()
 
 	// Mock Provider
@@ -392,7 +394,7 @@ func TestAuthHandler_SuccessHookFailure(t *testing.T) {
 
 func TestAuthHandler_PKCEGeneration(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
-	cookie, _ := middleware.NewSecureCookie[AuthStateMap]("auth-state", "1", keys)
+	cookie, _ := middleware.NewSecureCookie("auth-state", "1", keys)
 	reg := NewRegistry()
 	// PKCE enabled by default in RegisterOAuth2Provider
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{AuthURL: "http://provider/auth"}})
@@ -416,7 +418,8 @@ func TestAuthHandler_PKCEGeneration(t *testing.T) {
 
 	// Verify Verifier is stored in cookie
 	c := w.Result().Cookies()[0]
-	states, _ := cookie.Decode(c)
+	var states AuthStateMap
+	_ = cookie.Decode(c, &states)
 	for _, s := range states {
 		if s.PKCEVerifier == "" {
 			t.Error("expected PKCE verifier stored in state")

@@ -551,7 +551,8 @@ func TestSessionProcessor_KVSet_PersistsInCookieRoundTrip(t *testing.T) {
 	}
 
 	// Manual decode
-	decoded, err := sc.Decode(cookies[0])
+	var decoded sessionData[cbor.RawMessage]
+	err := sc.Decode(cookies[0], &decoded)
 	if err != nil {
 		t.Fatalf("Decode(updated cookie): %v", err)
 	}
@@ -668,7 +669,7 @@ func TestSessionProcessor_ExpiredSession_Clears(t *testing.T) {
 }
 
 // Helper to encode a session
-func encodeSession(t *testing.T, sc SecureCookie[sessionData[cbor.RawMessage]], sess *sessionData[cbor.RawMessage], maxAge int) *http.Cookie {
+func encodeSession(t *testing.T, sc SecureCookie, sess *sessionData[cbor.RawMessage], maxAge int) *http.Cookie {
 	t.Helper()
 	ck, err := sc.Encode(*sess, maxAge)
 	if err != nil {
@@ -677,13 +678,13 @@ func encodeSession(t *testing.T, sc SecureCookie[sessionData[cbor.RawMessage]], 
 	return ck
 }
 
-func newTestSessionProcessor(t *testing.T, opts ...SessionProcessorOption) (*SessionProcessor[cbor.RawMessage], SecureCookie[sessionData[cbor.RawMessage]]) {
+func newTestSessionProcessor(t *testing.T, opts ...SessionProcessorOption) (*SessionProcessor[cbor.RawMessage], SecureCookie) {
 	t.Helper()
 	keys := map[string][]byte{"a": make([]byte, DefaultAEADKeysize)}
 	if _, err := rand.Read(keys["a"]); err != nil {
 		t.Fatalf("rand.Read(key): %v", err)
 	}
-	p, err := NewSessionProcessor("OSS", "a", keys, opts...)
+	p, err := NewSessionProcessor("a", keys, opts...)
 	if err != nil {
 		t.Fatalf("NewSessionProcessor: %v", err)
 	}
@@ -719,9 +720,10 @@ func TestNewSessionProcessor_WithCustomOptions(t *testing.T) {
 	// Use a key size suitable for AES (16, 24, or 32 bytes). DefaultAEADKeysize (ChaCha20Poly1305) is 32.
 
 	proc, err := NewCustomSessionProcessor[cbor.RawMessage](
-		"OSS", "a", keys,
+		"a", keys,
 		marshal, unmarshal,
 		WithCookieOptions(WithAEAD(newAESGCMAEAD)),
+		WithCookieName("my-custom-session"),
 	)
 	if err != nil {
 		t.Fatalf("NewSessionProcessor: %v", err)
@@ -749,6 +751,9 @@ func TestNewSessionProcessor_WithCustomOptions(t *testing.T) {
 	cookies := w.Result().Cookies()
 	if len(cookies) == 0 {
 		t.Fatalf("no cookie set")
+	}
+	if cookies[0].Name != "my-custom-session" {
+		t.Fatalf("cookie name: got %q want %q", cookies[0].Name, "my-custom-session")
 	}
 
 	r2 := httptest.NewRequest("GET", "/", nil)

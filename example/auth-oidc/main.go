@@ -123,7 +123,6 @@ func main() {
 
 	// Using "OSS" as cookie name (default). Allow non-https cookies, for http://localhost:8080
 	sessionProcessor, err := middleware.NewSessionProcessor(
-		middleware.DefaultCookieName,
 		"key1",
 		map[string][]byte{"key1": sessionKey},
 		middleware.WithCookieOptions(

@@ -32,11 +32,11 @@ const maxCookieLen = 8192
 const DefaultAEADKeysize = chacha20poly1305.KeySize
 
 // SecureCookie is a codec for sealing/unsealing cookie values.
-type SecureCookie[T any] interface {
+type SecureCookie interface {
 	// Name returns the cookie name used by this codec.
 	Name() string
-	Encode(plain T, maxAge int) (*http.Cookie, error)
-	Decode(cookie *http.Cookie) (T, error)
+	Encode(plain any, maxAge int) (*http.Cookie, error)
+	Decode(cookie *http.Cookie, v any) error
 	// Clear returns an http.Cookie that clears this cookie in the client.
 	Clear() *http.Cookie
 }
@@ -60,7 +60,7 @@ func NewSecureCookieCodec(keyID string, keys map[string][]byte, newAEAD func(key
 		return nil, errors.New("keyID not found in keys")
 	}
 	if newAEAD == nil {
-		newAEAD = chacha20poly1305.NewX
+		return nil, errors.New("newAEAD must not be nil")
 	}
 	// Validate keys.
 	for id, k := range keys {
@@ -145,193 +145,71 @@ func (sc *SecureCookieCodec) Decode(value string, aad []byte) ([]byte, error) {
 // encryption key for sealing.
 //
 // The nonce is randomly generated per-cookie.
-type SecureCookieAEAD[T any] struct {
-	CookieName string
-
-	Codec *SecureCookieCodec
-
-	// Default http.Cookie fields for encoded cookies.
-	cfg secureCookieConfig
-
-	// Marshal converts a value of type T to a byte slice for sealing.
-	// If nil, defaults to cbor.Marshal from fxamacker/cbor/v2.
-	Marshal func(any) ([]byte, error)
-
-	// Unmarshal converts a byte slice into a value of type T.
-	// If nil, defaults to cbor.Unmarshal from fxamacker/cbor/v2.
-	Unmarshal func([]byte, any) error
-}
-
-// Name returns the cookie name.
-func (sc *SecureCookieAEAD[T]) Name() string {
-	if sc == nil {
-		return ""
-	}
-	return sc.CookieName
-}
-
-// SecureCookieOption configures the SessionProcessor.
-type SecureCookieOption func(*secureCookieConfig)
-
-type secureCookieConfig struct {
-	newAEAD  func([]byte) (cipher.AEAD, error)
+type SecureCookieAEAD struct {
+	name     string
 	path     string
 	domain   string
 	secure   bool
 	sameSite http.SameSite
+
+	Codec *SecureCookieCodec
+
+	marshal   func(any) ([]byte, error)
+	unmarshal func([]byte, any) error
+	newAEAD   func([]byte) (cipher.AEAD, error)
+}
+
+// Name returns the cookie name.
+func (sc *SecureCookieAEAD) Name() string {
+	if sc == nil {
+		return ""
+	}
+	return sc.name
+}
+
+// SecureCookieOption configures the SecureCookie.
+type SecureCookieOption func(*SecureCookieAEAD)
+
+// WithMarshalUnmarshal configures custom marshal/unmarshal functions.
+func WithMarshalUnmarshal(marshal func(any) ([]byte, error), unmarshal func([]byte, any) error) SecureCookieOption {
+	return func(sc *SecureCookieAEAD) {
+		sc.marshal = marshal
+		sc.unmarshal = unmarshal
+	}
+}
+
+// WithAEAD configures the cookie to use a custom AEAD factory (e.g. AES-GCM).
+func WithAEAD(f func([]byte) (cipher.AEAD, error)) SecureCookieOption {
+	return func(sc *SecureCookieAEAD) {
+		sc.newAEAD = f
+	}
 }
 
 // WithPath configures the cookie path.
 func WithPath(path string) SecureCookieOption {
-	return func(c *secureCookieConfig) {
-		c.path = path
+	return func(sc *SecureCookieAEAD) {
+		sc.path = path
 	}
 }
 
 // WithDomain configures the cookie domain.
 func WithDomain(domain string) SecureCookieOption {
-	return func(c *secureCookieConfig) {
-		c.domain = domain
+	return func(sc *SecureCookieAEAD) {
+		sc.domain = domain
 	}
 }
 
 // WithSecure configures the cookie secure flag.
 func WithSecure(secure bool) SecureCookieOption {
-	return func(c *secureCookieConfig) {
-		c.secure = secure
+	return func(sc *SecureCookieAEAD) {
+		sc.secure = secure
 	}
 }
 
 // WithSameSite configures the cookie sameSite attribute.
 func WithSameSite(sameSite http.SameSite) SecureCookieOption {
-	return func(c *secureCookieConfig) {
-		c.sameSite = sameSite
-	}
-}
-
-// WithAEAD configures the session to use a custom AEAD factory (e.g. AES-GCM).
-func WithAEAD(f func([]byte) (cipher.AEAD, error)) SecureCookieOption {
-	return func(c *secureCookieConfig) {
-		c.newAEAD = f
-	}
-}
-
-// NewCustomSecureCookie creates a SecureCookie codec with custom marshal/unmarshal.
-func NewCustomSecureCookie[T any](cookieName string, keyID string, keys map[string][]byte, marshal func(any) ([]byte, error), unmarshal func([]byte, any) error, opts ...SecureCookieOption) (*SecureCookieAEAD[T], error) {
-	cfg := secureCookieConfig{
-		newAEAD:  nil, // Default AEAD (ChaCha20-Poly1305)
-		domain:   "",
-		path:     "/",
-		secure:   true,
-		sameSite: http.SameSiteLaxMode,
-	}
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-
-	codec, err := NewSecureCookieCodec(keyID, keys, cfg.newAEAD)
-	if err != nil {
-		return nil, err
-	}
-
-	if cfg.path == "" {
-		cfg.path = "/"
-	}
-
-	// If marshal or unmarshal are not provided, default to CBOR encoding.
-	if marshal == nil {
-		marshal = cbor.Marshal
-	}
-	if unmarshal == nil {
-		unmarshal = cbor.Unmarshal
-	}
-
-	return &SecureCookieAEAD[T]{
-		CookieName: cookieName,
-		Codec:      codec,
-		cfg:        cfg,
-		Marshal:    marshal,
-		Unmarshal:  unmarshal,
-	}, nil
-}
-
-func (sc *SecureCookieAEAD[T]) aad() []byte {
-	secureStr := "f"
-	if sc.cfg.secure {
-		secureStr = "t"
-	}
-	return []byte(sc.CookieName + ":" + sc.cfg.domain + ":" + sc.cfg.path + ":" + secureStr)
-}
-
-// Encode marshals and seals plain and returns an http.Cookie carrying the value.
-func (sc *SecureCookieAEAD[T]) Encode(plain T, maxAge int) (*http.Cookie, error) {
-	if maxAge <= 0 {
-		return nil, ErrCookieInvalid
-	}
-	if sc.Codec == nil || sc.Marshal == nil {
-		return nil, ErrCookieConfig
-	}
-
-	plainBytes, err := sc.Marshal(plain)
-	if err != nil {
-		return nil, err
-	}
-
-	val, err := sc.Codec.Encode(plainBytes, sc.aad())
-	if err != nil {
-		return nil, err
-	}
-
-	return &http.Cookie{
-		Name:     sc.CookieName,
-		Value:    val,
-		Path:     sc.cfg.path,
-		Domain:   sc.cfg.domain,
-		MaxAge:   maxAge,
-		Secure:   sc.cfg.secure,
-		HttpOnly: true,
-		SameSite: sc.cfg.sameSite,
-		Expires:  time.Now().Add(time.Duration(maxAge) * time.Second),
-	}, nil
-}
-
-// Decode opens the cookie value and returns the unmarshaled value.
-func (sc *SecureCookieAEAD[T]) Decode(cookie *http.Cookie) (T, error) {
-	var zero T
-	if cookie == nil {
-		return zero, ErrCookieFormat
-	}
-	if sc.Codec == nil || sc.Unmarshal == nil {
-		return zero, ErrCookieConfig
-	}
-
-	plainBytes, err := sc.Codec.Decode(cookie.Value, sc.aad())
-	if err != nil {
-		return zero, err
-	}
-
-	var plain T
-	if err := sc.Unmarshal(plainBytes, &plain); err != nil {
-		return zero, err
-	}
-	return plain, nil
-}
-
-// Clear returns a cookie that clears this cookie in the client.
-func (sc *SecureCookieAEAD[T]) Clear() *http.Cookie {
-	if sc == nil {
-		return nil
-	}
-	return &http.Cookie{
-		Name:     sc.CookieName,
-		Domain:   sc.cfg.domain,
-		Path:     sc.cfg.path,
-		HttpOnly: true,
-		Secure:   sc.cfg.secure,
-		SameSite: sc.cfg.sameSite,
-		Value:    "",
-		MaxAge:   -1,
-		Expires:  time.Unix(0, 0),
+	return func(sc *SecureCookieAEAD) {
+		sc.sameSite = sameSite
 	}
 }
 
@@ -344,13 +222,112 @@ func (sc *SecureCookieAEAD[T]) Clear() *http.Cookie {
 //   - HttpOnly: true
 //   - Secure: true
 //   - SameSite: Lax
-func NewSecureCookie[T any](cookieName, keyID string, keys map[string][]byte, opts ...SecureCookieOption) (SecureCookie[T], error) {
-	return NewCustomSecureCookie[T](
-		cookieName,
-		keyID,
-		keys,
-		nil, // Default Marshal (CBOR)
-		nil, // Default Unmarshal (CBOR)
-		opts...,
-	)
+
+func NewSecureCookie(cookieName string, keyID string, keys map[string][]byte, opts ...SecureCookieOption) (*SecureCookieAEAD, error) {
+	sc := &SecureCookieAEAD{
+		name:      cookieName,
+		marshal:   cbor.Marshal,
+		unmarshal: cbor.Unmarshal,
+		newAEAD:   chacha20poly1305.NewX,
+		domain:    "",
+		path:      "/",
+		secure:    true,
+		sameSite:  http.SameSiteLaxMode,
+	}
+	for _, opt := range opts {
+		opt(sc)
+	}
+
+	codec, err := NewSecureCookieCodec(keyID, keys, sc.newAEAD)
+	if err != nil {
+		return nil, err
+	}
+	sc.Codec = codec
+
+	if sc.path == "" {
+		sc.path = "/"
+	}
+
+	return sc, nil
+}
+
+// aad calculates the additional authenticated data for this cookie.
+// This data binds the cookie name, domain, path and secure flag to
+// the encoded value.
+func (sc *SecureCookieAEAD) aad() []byte {
+	secureStr := "f"
+	if sc.secure {
+		secureStr = "t"
+	}
+	return []byte(sc.name + ":" + sc.domain + ":" + sc.path + ":" + secureStr)
+}
+
+// Encode marshals and seals plain and returns an http.Cookie carrying the value.
+func (sc *SecureCookieAEAD) Encode(plain any, maxAge int) (*http.Cookie, error) {
+	if maxAge <= 0 {
+		return nil, ErrCookieInvalid
+	}
+	if sc.Codec == nil || sc.marshal == nil {
+		return nil, ErrCookieConfig
+	}
+
+	plainBytes, err := sc.marshal(plain)
+	if err != nil {
+		return nil, err
+	}
+
+	val, err := sc.Codec.Encode(plainBytes, sc.aad())
+	if err != nil {
+		return nil, err
+	}
+
+	return &http.Cookie{
+		Name:     sc.name,
+		Value:    val,
+		Path:     sc.path,
+		Domain:   sc.domain,
+		MaxAge:   maxAge,
+		Secure:   sc.secure,
+		HttpOnly: true,
+		SameSite: sc.sameSite,
+		Expires:  time.Now().Add(time.Duration(maxAge) * time.Second),
+	}, nil
+}
+
+// Decode opens the cookie value and returns the unmarshaled value.
+func (sc *SecureCookieAEAD) Decode(cookie *http.Cookie, v any) error {
+	if cookie == nil {
+		return ErrCookieFormat
+	}
+	if sc.Codec == nil || sc.unmarshal == nil {
+		return ErrCookieConfig
+	}
+
+	plainBytes, err := sc.Codec.Decode(cookie.Value, sc.aad())
+	if err != nil {
+		return err
+	}
+
+	if err := sc.unmarshal(plainBytes, v); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Clear returns a cookie that clears this cookie in the client.
+func (sc *SecureCookieAEAD) Clear() *http.Cookie {
+	if sc == nil {
+		return nil
+	}
+	return &http.Cookie{
+		Name:     sc.name,
+		Domain:   sc.domain,
+		Path:     sc.path,
+		HttpOnly: true,
+		Secure:   sc.secure,
+		SameSite: sc.sameSite,
+		Value:    "",
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+	}
 }
