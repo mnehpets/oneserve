@@ -22,6 +22,7 @@
 //   - StaticFileRenderer: Serves a single static file.
 //   - DirectoryHTMLRenderer: Renders a directory listing as HTML.
 //   - NoContentRenderer: Writes a status code with no body.
+//   - ProxyRenderer: Proxies the request to an upstream endpoint.
 package endpoint
 
 import (
