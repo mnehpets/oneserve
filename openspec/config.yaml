@@ -1,0 +1,27 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+context: |
+  Tech stack: go
+  Document all public APIs and exported functions with godoc.
+  Write tests to ensure spec compliance.
+  Write unit tests to cover any significant code, non-trivial logic and interaction beyond a single file.
+  Include usage examples for major APIs
+  Update README.md with setup and usage.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
