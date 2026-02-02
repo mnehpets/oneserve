@@ -23,6 +23,19 @@ type PreAuthHook func(ctx context.Context, w http.ResponseWriter, r *http.Reques
 // maxAppDataBytes is the maximum allowed size of AppData after base64url decoding.
 const maxAppDataBytes = 512
 
+// ProviderError represents an error returned by the identity provider.
+type ProviderError struct {
+	Code        string
+	Description string
+}
+
+func (e *ProviderError) Error() string {
+	if e.Description != "" {
+		return fmt.Sprintf("provider error: %s (description: %s)", e.Code, e.Description)
+	}
+	return fmt.Sprintf("provider error: %s", e.Code)
+}
+
 // AuthParams contains parameters for initiating an OAuth flow.
 // It is used for both LoginParams and AuthState to ensure consistency.
 type AuthParams struct {
@@ -45,6 +58,8 @@ type SuccessEndpoint endpoint.EndpointFunc[*SuccessParams]
 
 // FailureEndpoint is invoked when an OAuth flow fails.
 // It has the requirements of an endpoint.EndpointFunc.
+// If the failure was an error returned by the identity provider, an error of type *ProviderError
+// will be passed as params to the failure endpoint.
 // It should return a Renderer to render the failure response.
 // If it returns an error, the error will be handled by the default error handling mechanism.
 type FailureEndpoint endpoint.EndpointFunc[error]
@@ -243,7 +258,7 @@ func NewHandler(registry *Registry, cookieName, keyID string, keys map[string][]
 
 		// Check for provider error
 		if params.Error != "" {
-			err := fmt.Errorf("provider error: %s (description: %s)", params.Error, params.ErrorDesc)
+			err := &ProviderError{Code: params.Error, Description: params.ErrorDesc}
 			return h.failure(w, r, endpoint.Error(http.StatusBadRequest, "provider returned error", err))
 		}
 

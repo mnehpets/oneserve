@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -167,6 +168,43 @@ func TestAuthHandler_Callback_Errors(t *testing.T) {
 	h.ServeHTTP(w2, r2)
 	if w2.Result().StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400 for invalid state, got %d", w2.Result().StatusCode)
+	}
+}
+
+func TestAuthHandler_ProviderError(t *testing.T) {
+	keys := map[string][]byte{"1": make([]byte, 32)}
+	reg := NewRegistry()
+	reg.RegisterOAuth2Provider("test", &oauth2.Config{})
+
+	var capturedErr error
+	failureHook := func(w http.ResponseWriter, r *http.Request, err error) (endpoint.Renderer, error) {
+		capturedErr = err
+		return &endpoint.NoContentRenderer{Status: http.StatusBadRequest}, nil
+	}
+
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth", WithFailureEndpoint(failureHook))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/auth/callback/test?error=access_denied&error_description=user_denied", nil)
+	h.ServeHTTP(w, r)
+
+	if capturedErr == nil {
+		t.Fatal("expected failure endpoint to be called")
+	}
+
+	var providerErr *ProviderError
+	if !errors.As(capturedErr, &providerErr) {
+		t.Fatalf("expected error to be of type *ProviderError, got %T", capturedErr)
+	}
+
+	if providerErr.Code != "access_denied" {
+		t.Errorf("expected code access_denied, got %s", providerErr.Code)
+	}
+	if providerErr.Description != "user_denied" {
+		t.Errorf("expected description user_denied, got %s", providerErr.Description)
 	}
 }
 
