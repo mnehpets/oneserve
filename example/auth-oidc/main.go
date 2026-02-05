@@ -210,7 +210,11 @@ func main() {
 		auth.WithCookieOptions(
 			middleware.WithSecure(false),
 		),
-		auth.WithSuccessEndpoint(func(w http.ResponseWriter, r *http.Request, params *auth.SuccessParams) (endpoint.Renderer, error) {
+		auth.WithResultEndpoint(func(w http.ResponseWriter, r *http.Request, params *auth.AuthResult) (endpoint.Renderer, error) {
+			if params.Error != nil {
+				return nil, params.Error
+			}
+
 			session, ok := middleware.SessionFromContext(r.Context())
 			if !ok {
 				return nil, fmt.Errorf("session not found in context")
@@ -249,13 +253,13 @@ func main() {
 			if email == "" || !verified {
 				return nil, endpoint.Error(http.StatusUnauthorized, "email not verified or missing", nil)
 			}
-			fmt.Printf("Successful authenticated with provider %v, nextURL %v, verified email %v\n", params.ProviderID, params.NextURL, email)
+			fmt.Printf("Successful authenticated with provider %v, nextURL %v, verified email %v\n", params.ProviderID, params.AuthParams.NextURL, email)
 			if err := session.Login(email); err != nil {
 				return nil, endpoint.Error(http.StatusInternalServerError, "login failed", err)
 			}
 
 			// Redirect to NextURL or root
-			target := params.NextURL
+			target := params.AuthParams.NextURL
 			if target == "" {
 				target = "/"
 			}

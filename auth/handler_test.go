@@ -88,18 +88,21 @@ func TestAuthHandler_Login(t *testing.T) {
 	state := u.Query().Get("state")
 
 	// 2. Test Callback
-	// Mock success hook
-	var successCalled bool
-	h.success = func(w http.ResponseWriter, r *http.Request, params *SuccessParams) (endpoint.Renderer, error) {
-		successCalled = true
-		if params.ProviderID != "test-provider" {
-			t.Errorf("expected provider test-provider, got %s", params.ProviderID)
+	// Mock result endpoint
+	var resultCalled bool
+	h.result = func(w http.ResponseWriter, r *http.Request, result *AuthResult) (endpoint.Renderer, error) {
+		resultCalled = true
+		if result.ProviderID != "test-provider" {
+			t.Errorf("expected provider test-provider, got %s", result.ProviderID)
 		}
-		if string(params.AppData) != "123" {
-			t.Errorf("expected app_data 123, got %s", string(params.AppData))
+		if result.Error != nil {
+			t.Errorf("expected no error, got %v", result.Error)
 		}
-		if params.Token.AccessToken != "mock_access_token" {
-			t.Errorf("expected access token mock_access_token, got %s", params.Token.AccessToken)
+		if string(result.AuthParams.AppData) != "123" {
+			t.Errorf("expected app_data 123, got %s", string(result.AuthParams.AppData))
+		}
+		if result.Token.AccessToken != "mock_access_token" {
+			t.Errorf("expected access token mock_access_token, got %s", result.Token.AccessToken)
 		}
 		return &endpoint.RedirectRenderer{URL: "/dashboard", Status: http.StatusFound}, nil
 	}
@@ -112,8 +115,8 @@ func TestAuthHandler_Login(t *testing.T) {
 	if w2.Result().StatusCode != http.StatusFound {
 		t.Errorf("callback failed: %v", w2.Result().Status)
 	}
-	if !successCalled {
-		t.Error("success hook not called")
+	if !resultCalled {
+		t.Error("result endpoint not called")
 	}
 }
 
@@ -173,31 +176,51 @@ func TestAuthHandler_Callback_Errors(t *testing.T) {
 
 func TestAuthHandler_ProviderError(t *testing.T) {
 	keys := map[string][]byte{"1": make([]byte, 32)}
+	cookie, _ := middleware.NewSecureCookie("auth-state", "1", keys)
 	reg := NewRegistry()
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{})
 
-	var capturedErr error
-	failureHook := func(w http.ResponseWriter, r *http.Request, err error) (endpoint.Renderer, error) {
-		capturedErr = err
+	var capturedResult *AuthResult
+	resultEndpoint := func(w http.ResponseWriter, r *http.Request, result *AuthResult) (endpoint.Renderer, error) {
+		capturedResult = result
 		return &endpoint.NoContentRenderer{Status: http.StatusBadRequest}, nil
 	}
 
-	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth", WithFailureEndpoint(failureHook))
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth", WithResultEndpoint(resultEndpoint))
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	// Set up valid state in cookie
+	authState := AuthState{
+		AuthParams: AuthParams{NextURL: "/"},
+	}
+	c, _ := cookie.Encode(AuthStateMap{"test_state": authState}, 3600)
+
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/auth/callback/test?error=access_denied&error_description=user_denied", nil)
+	r := httptest.NewRequest("GET", "/auth/callback/test?state=test_state&error=access_denied&error_description=user_denied", nil)
+	r.AddCookie(c)
 	h.ServeHTTP(w, r)
 
-	if capturedErr == nil {
-		t.Fatal("expected failure endpoint to be called")
+	if capturedResult == nil {
+		t.Fatal("expected result endpoint to be called")
+	}
+
+	if capturedResult.Error == nil {
+		t.Fatal("expected error in result")
+	}
+
+	// Check that AuthParams was passed even for error case
+	if capturedResult.AuthParams == nil {
+		t.Fatal("expected AuthParams in result for error case")
+	}
+	if capturedResult.AuthParams.NextURL != "/" {
+		t.Errorf("expected NextURL to be '/', got %q", capturedResult.AuthParams.NextURL)
 	}
 
 	var providerErr *ProviderError
-	if !errors.As(capturedErr, &providerErr) {
-		t.Fatalf("expected error to be of type *ProviderError, got %T", capturedErr)
+	if !errors.As(capturedResult.Error, &providerErr) {
+		t.Fatalf("expected error to be of type *ProviderError, got %T", capturedResult.Error)
 	}
 
 	if providerErr.Code != "access_denied" {
@@ -402,12 +425,15 @@ func TestAuthHandler_SuccessHookFailure(t *testing.T) {
 
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{TokenURL: srv.URL + "/token"}})
 
-	// Success endpoint that fails
-	successEndpoint := func(w http.ResponseWriter, r *http.Request, params *SuccessParams) (endpoint.Renderer, error) {
+	// Result endpoint that fails for success case
+	resultEndpoint := func(w http.ResponseWriter, r *http.Request, result *AuthResult) (endpoint.Renderer, error) {
+		if result.Error != nil {
+			return nil, result.Error
+		}
 		return nil, endpoint.Error(http.StatusTeapot, "simulated failure", nil)
 	}
 
-	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth", WithSuccessEndpoint(successEndpoint))
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth", WithResultEndpoint(resultEndpoint))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,9 +577,9 @@ func TestAuthHandler_AppDataPersistence(t *testing.T) {
 
 	reg.RegisterOAuth2Provider("test", &oauth2.Config{Endpoint: oauth2.Endpoint{TokenURL: srv.URL}})
 
-	var capturedAppData []byte
-	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth", WithSuccessEndpoint(func(w http.ResponseWriter, r *http.Request, params *SuccessParams) (endpoint.Renderer, error) {
-		capturedAppData = params.AppData
+	var capturedResult *AuthResult
+	h, err := NewHandler(reg, "auth-state", "1", keys, "http://example.com", "/auth", WithResultEndpoint(func(w http.ResponseWriter, r *http.Request, result *AuthResult) (endpoint.Renderer, error) {
+		capturedResult = result
 		return &endpoint.RedirectRenderer{URL: "/"}, nil
 	}))
 	if err != nil {
@@ -583,8 +609,11 @@ func TestAuthHandler_AppDataPersistence(t *testing.T) {
 	r2.AddCookie(c)
 	h.ServeHTTP(w2, r2)
 
-	if string(capturedAppData) != complexData {
-		t.Errorf("AppData mismatch.\nExpected: %q\nGot:      %q", complexData, string(capturedAppData))
+	if capturedResult == nil {
+		t.Fatal("expected result endpoint to be called")
+	}
+	if string(capturedResult.AuthParams.AppData) != complexData {
+		t.Errorf("AppData mismatch.\nExpected: %q\nGot:      %q", complexData, string(capturedResult.AuthParams.AppData))
 	}
 }
 

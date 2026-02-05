@@ -45,24 +45,19 @@ type AuthParams struct {
 	AppData []byte `query:"app_data,base64url" cbor:"2,keyasint,omitempty" maxLength:"683"`
 }
 
-type SuccessParams struct {
+// AuthResult contains the result of an OAuth authentication request.
+// For success, Token and IDToken are filled and Error is nil.
+// For failure, Token and IDToken are nil and Error indicates the failure.
+type AuthResult struct {
 	ProviderID string
 	Token      *oauth2.Token
 	IDToken    *oidc.IDToken
-	AppData    []byte
-	NextURL    string
+	AuthParams *AuthParams
+	Error      error
 }
 
-// SuccessEndpoint is invoked after a successful OAuth callback.
-type SuccessEndpoint endpoint.EndpointFunc[*SuccessParams]
-
-// FailureEndpoint is invoked when an OAuth flow fails.
-// It has the requirements of an endpoint.EndpointFunc.
-// If the failure was an error returned by the identity provider, an error of type *ProviderError
-// will be passed as params to the failure endpoint.
-// It should return a Renderer to render the failure response.
-// If it returns an error, the error will be handled by the default error handling mechanism.
-type FailureEndpoint endpoint.EndpointFunc[error]
+// ResultEndpoint is invoked after an OAuth callback, for both success and failure cases.
+type ResultEndpoint endpoint.EndpointFunc[*AuthResult]
 
 // defaultPreAuthHook is the default implementation.
 // It ensures the NextURL is a safe relative path to prevent open redirects.
@@ -71,14 +66,13 @@ func defaultPreAuthHook(ctx context.Context, w http.ResponseWriter, r *http.Requ
 	return params, nil
 }
 
-// defaultSuccessEndpoint is the default implementation that redirects to NextURL.
-func defaultSuccessEndpoint(w http.ResponseWriter, r *http.Request, params *SuccessParams) (endpoint.Renderer, error) {
-	return &endpoint.RedirectRenderer{URL: params.NextURL, Status: http.StatusFound}, nil
-}
-
-// defaultFailureEndpoint is the default implementation that simply returns the error.
-func defaultFailureEndpoint(w http.ResponseWriter, r *http.Request, err error) (endpoint.Renderer, error) {
-	return nil, err
+// defaultResultEndpoint is the default implementation that handles both success and failure.
+// For success, it redirects to NextURL. For failure, it returns the error.
+func defaultResultEndpoint(w http.ResponseWriter, r *http.Request, result *AuthResult) (endpoint.Renderer, error) {
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &endpoint.RedirectRenderer{URL: result.AuthParams.NextURL, Status: http.StatusFound}, nil
 }
 
 // AuthHandler implements the OAuth flow orchestration.
@@ -92,8 +86,7 @@ type AuthHandler struct {
 	cookie middleware.SecureCookie
 
 	preAuth PreAuthHook
-	success SuccessEndpoint
-	failure FailureEndpoint
+	result  ResultEndpoint
 
 	// processors are the middleware processors to run for each endpoint
 	processors []endpoint.Processor
@@ -126,17 +119,10 @@ func WithPreAuthHook(h PreAuthHook) Option {
 	}
 }
 
-// WithSuccessEndpoint sets the SuccessEndpoint.
-func WithSuccessEndpoint(h SuccessEndpoint) Option {
+// WithResultEndpoint sets the ResultEndpoint.
+func WithResultEndpoint(h ResultEndpoint) Option {
 	return func(ah *AuthHandler) {
-		ah.success = h
-	}
-}
-
-// WithFailureEndpoint sets the FailureEndpoint.
-func WithFailureEndpoint(h FailureEndpoint) Option {
-	return func(ah *AuthHandler) {
-		ah.failure = h
+		ah.result = h
 	}
 }
 
@@ -157,8 +143,7 @@ func NewHandler(registry *Registry, cookieName, keyID string, keys map[string][]
 		publicURL: strings.TrimRight(publicURL, "/"),
 		basePath:  basePath,
 		preAuth:   defaultPreAuthHook,
-		success:   defaultSuccessEndpoint,
-		failure:   defaultFailureEndpoint,
+		result:    defaultResultEndpoint,
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -190,18 +175,30 @@ func NewHandler(registry *Registry, cookieName, keyID string, keys map[string][]
 		// preAuth sanitizes and returns updated AuthParams
 		params.AuthParams, err = h.preAuth(ctx, w, r, providerID, params.AuthParams)
 		if err != nil {
-			return h.failure(w, r, endpoint.Error(http.StatusBadRequest, "pre-auth failed", err))
+			return h.result(w, r, &AuthResult{
+				ProviderID: providerID,
+				AuthParams: &params.AuthParams,
+				Error:      endpoint.Error(http.StatusBadRequest, "pre-auth failed", err),
+			})
 		}
 
 		// Check AppData length (decoded)
 		if len(params.AuthParams.AppData) > maxAppDataBytes {
-			return h.failure(w, r, endpoint.Error(http.StatusBadRequest, fmt.Sprintf("app_data exceeds maximum length of %d bytes", maxAppDataBytes), nil))
+			return h.result(w, r, &AuthResult{
+				ProviderID: providerID,
+				AuthParams: &params.AuthParams,
+				Error:      endpoint.Error(http.StatusBadRequest, fmt.Sprintf("app_data exceeds maximum length of %d bytes", maxAppDataBytes), nil),
+			})
 		}
 
 		// 2. Prepare State
 		state, err := generateState()
 		if err != nil {
-			return h.failure(w, r, endpoint.Error(http.StatusInternalServerError, "failed to generate state", err))
+			return h.result(w, r, &AuthResult{
+				ProviderID: providerID,
+				AuthParams: &params.AuthParams,
+				Error:      endpoint.Error(http.StatusInternalServerError, "failed to generate state", err),
+			})
 		}
 
 		authState := AuthState{
@@ -213,7 +210,11 @@ func NewHandler(registry *Registry, cookieName, keyID string, keys map[string][]
 		if p.usePKCE {
 			verifier, challenge, err := generatePKCE()
 			if err != nil {
-				return h.failure(w, r, endpoint.Error(http.StatusInternalServerError, "failed to generate PKCE", err))
+				return h.result(w, r, &AuthResult{
+					ProviderID: providerID,
+					AuthParams: &params.AuthParams,
+					Error:      endpoint.Error(http.StatusInternalServerError, "failed to generate PKCE", err),
+				})
 			}
 			authState.PKCEVerifier = verifier
 			codeChallenge = challenge
@@ -224,14 +225,22 @@ func NewHandler(registry *Registry, cookieName, keyID string, keys map[string][]
 		if p.oidcProvider != nil {
 			nonce, err = generateState() // Reuse random string gen
 			if err != nil {
-				return h.failure(w, r, endpoint.Error(http.StatusInternalServerError, "failed to generate nonce", err))
+				return h.result(w, r, &AuthResult{
+					ProviderID: providerID,
+					AuthParams: &params.AuthParams,
+					Error:      endpoint.Error(http.StatusInternalServerError, "failed to generate nonce", err),
+				})
 			}
 			authState.Nonce = nonce
 		}
 
 		// 5. Store State
 		if err := h.addState(w, r, state, authState); err != nil {
-			return h.failure(w, r, endpoint.Error(http.StatusInternalServerError, "failed to save state", err))
+			return h.result(w, r, &AuthResult{
+				ProviderID: providerID,
+				AuthParams: &params.AuthParams,
+				Error:      endpoint.Error(http.StatusInternalServerError, "failed to save state", err),
+			})
 		}
 
 		// 6. Redirect
@@ -256,21 +265,29 @@ func NewHandler(registry *Registry, cookieName, keyID string, keys map[string][]
 		ctx := r.Context()
 		providerID := params.ProviderID
 
-		// Check for provider error
-		if params.Error != "" {
-			err := &ProviderError{Code: params.Error, Description: params.ErrorDesc}
-			return h.failure(w, r, endpoint.Error(http.StatusBadRequest, "provider returned error", err))
-		}
-
 		p, ok := h.registry.Get(providerID)
 		if !ok {
 			return nil, endpoint.Error(http.StatusNotFound, "provider not found", nil)
 		}
 
-		// Retrieve state
+		// Retrieve state then clear it from cookie, result callback happens no more than once per request.
 		authState, err := h.popState(w, r, params.State)
 		if err != nil {
-			return h.failure(w, r, endpoint.Error(http.StatusBadRequest, "invalid state", err))
+			// Without valid state, we can't pass AuthParams to the result callback.
+			return h.result(w, r, &AuthResult{
+				ProviderID: providerID,
+				Error:      endpoint.Error(http.StatusBadRequest, "invalid state", err),
+			})
+		}
+
+		// Check for provider error
+		if params.Error != "" {
+			err := &ProviderError{Code: params.Error, Description: params.ErrorDesc}
+			return h.result(w, r, &AuthResult{
+				ProviderID: providerID,
+				AuthParams: &authState.AuthParams,
+				Error:      endpoint.Error(http.StatusBadRequest, "provider returned error", err),
+			})
 		}
 
 		// Prepare Exchange options
@@ -286,7 +303,11 @@ func NewHandler(registry *Registry, cookieName, keyID string, keys map[string][]
 
 		token, err := conf.Exchange(ctx, params.Code, opts...)
 		if err != nil {
-			return h.failure(w, r, endpoint.Error(http.StatusInternalServerError, "token exchange failed", err))
+			return h.result(w, r, &AuthResult{
+				ProviderID: providerID,
+				AuthParams: &authState.AuthParams,
+				Error:      endpoint.Error(http.StatusInternalServerError, "token exchange failed", err),
+			})
 		}
 
 		// OIDC Validation
@@ -295,33 +316,43 @@ func NewHandler(registry *Registry, cookieName, keyID string, keys map[string][]
 			rawIDToken, ok := token.Extra("id_token").(string)
 			if !ok {
 				err := fmt.Errorf("no id_token returned")
-				return h.failure(w, r, endpoint.Error(http.StatusInternalServerError, "no id_token returned", err))
+				return h.result(w, r, &AuthResult{
+					ProviderID: providerID,
+					AuthParams: &authState.AuthParams,
+					Error:      endpoint.Error(http.StatusInternalServerError, "no id_token returned", err),
+				})
 			}
 
 			verifier := p.verifier
 			idToken, err = verifier.Verify(ctx, rawIDToken)
 			if err != nil {
-				return h.failure(w, r, endpoint.Error(http.StatusInternalServerError, "id_token verification failed", err))
+				return h.result(w, r, &AuthResult{
+					ProviderID: providerID,
+					AuthParams: &authState.AuthParams,
+					Error:      endpoint.Error(http.StatusInternalServerError, "id_token verification failed", err),
+				})
 			}
 
 			// Verify Nonce
 			if authState.Nonce != "" {
 				if subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(authState.Nonce)) != 1 {
 					err := fmt.Errorf("nonce mismatch")
-					return h.failure(w, r, endpoint.Error(http.StatusBadRequest, "nonce mismatch", err))
+					return h.result(w, r, &AuthResult{
+						ProviderID: providerID,
+						AuthParams: &authState.AuthParams,
+						Error:      endpoint.Error(http.StatusBadRequest, "nonce mismatch", err),
+					})
 				}
 			}
 		}
 
 		// Success
-		successParams := SuccessParams{
+		return h.result(w, r, &AuthResult{
 			ProviderID: providerID,
 			Token:      token,
 			IDToken:    idToken,
-			AppData:    authState.AuthParams.AppData,
-			NextURL:    authState.AuthParams.NextURL,
-		}
-		return h.success(w, r, &successParams)
+			AuthParams: &authState.AuthParams,
+		})
 	}, h.processors...))
 
 	return h, nil
