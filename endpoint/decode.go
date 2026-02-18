@@ -681,6 +681,21 @@ func setFieldFromBytesWithEncoding(v reflect.Value, b []byte, encodingFlag strin
 		return setFieldFromBytesWithEncoding(v.Elem(), b, encodingFlag)
 	}
 
+	// Special-case JSON encoding.
+	if encodingFlag == "json" {
+		// In case of the field being a json body, it would be more
+		// efficient to decode directly from the reader, but the
+		// code is easier to maintain if all sources are buffered
+		// into a []byte value.
+		//
+		// Future optimization could convert all sources to io.Reader.
+		dec := json.NewDecoder(bytes.NewReader(b))
+		if err := dec.Decode(v.Addr().Interface()); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	// Special-case []byte with optional encoding.
 	if v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.Uint8 {
 		switch encodingFlag {
@@ -708,21 +723,6 @@ func setFieldFromBytesWithEncoding(v reflect.Value, b []byte, encodingFlag strin
 		default:
 			return newEndpointError(http.StatusInternalServerError, "", fmt.Errorf("unsupported bytes decoding %q", encodingFlag))
 		}
-	}
-
-	// Special-case JSON encoding.
-	if encodingFlag == "json" {
-		// In case of the field being a json body, it would be more
-		// efficient to decode directly from the reader, but the
-		// code is easier to maintain if all sources are buffered
-		// into a []byte value.
-		//
-		// Future optimization could convert all sources to io.Reader.
-		dec := json.NewDecoder(bytes.NewReader(b))
-		if err := dec.Decode(v.Addr().Interface()); err != nil {
-			return err
-		}
-		return nil
 	}
 
 	if encodingFlag == "base64" || encodingFlag == "base64url" {

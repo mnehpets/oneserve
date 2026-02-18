@@ -3,6 +3,7 @@ package endpoint
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"mime/multipart"
@@ -353,6 +354,24 @@ func TestUnmarshal_Body_Default_Bytes(t *testing.T) {
 	}
 	if string(p.Body) != "hello" {
 		t.Fatalf("expected %q, got %q", "hello", string(p.Body))
+	}
+}
+
+func TestUnmarshal_Body_RawJSON(t *testing.T) {
+	type params struct {
+		Body json.RawMessage `body:",json"`
+	}
+
+	raw := `{"foo":"bar"}`
+	req := httptest.NewRequest(http.MethodPost, "/t", strings.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+
+	var p params
+	if err := Unmarshal(req, &p); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if string(p.Body) != raw {
+		t.Fatalf("expected %s, got %s", raw, string(p.Body))
 	}
 }
 
