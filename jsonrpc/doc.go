@@ -37,6 +37,8 @@
 //	func (m *Methods) Ping(ctx context.Context, params struct{}) (string, error)
 //
 // Methods support both positional (array) and named (object) parameters.
+// Parameters are optional; fields not provided in the request will be set to
+// their zero values.
 //
 // # Namespaces
 //

@@ -39,8 +39,7 @@ type rpcMethod struct {
 	receiver    reflect.Value
 	method      reflect.Method
 	paramType   reflect.Type
-	paramNames  []string // JSON tag names for validation and named params
-	paramFields []int    // Field indices for positional params unmarshaling
+	paramFields []int // Field indices for positional params unmarshaling
 	methodName  string
 }
 
@@ -82,15 +81,6 @@ func (m *rpcMethod) call(ctx context.Context, params json.RawMessage) (result in
 			if err := json.Unmarshal(params, param.Interface()); err != nil {
 				return nil, NewError(CodeInvalidParams, "invalid params")
 			}
-			// Verify all required params are present in the JSON object.
-			var paramMap map[string]json.RawMessage
-			if err := json.Unmarshal(params, &paramMap); err == nil {
-				for _, name := range m.paramNames {
-					if _, ok := paramMap[name]; !ok {
-						return nil, NewError(CodeInvalidParams, "missing param: "+name)
-					}
-				}
-			}
 		}
 		args = append(args, param.Elem())
 	}
@@ -109,14 +99,16 @@ func (m *rpcMethod) call(ctx context.Context, params json.RawMessage) (result in
 // JSONRPCEndpoint is a registry for JSON-RPC methods.
 // Use endpoint.Handler(e.Endpoint, processors...) to create an http.Handler.
 type JSONRPCEndpoint struct {
-	mu      sync.RWMutex
-	methods map[string]*rpcMethod
+	mu           sync.RWMutex
+	methods      map[string]*rpcMethod
+	MaxBatchSize int // Maximum number of requests allowed in a batch (0 = unlimited)
 }
 
 // NewEndpoint creates a new JSON-RPC method registry.
 func NewEndpoint() *JSONRPCEndpoint {
 	return &JSONRPCEndpoint{
-		methods: make(map[string]*rpcMethod),
+		methods:      make(map[string]*rpcMethod),
+		MaxBatchSize: 100,
 	}
 }
 
@@ -196,6 +188,10 @@ func (e *JSONRPCEndpoint) handleBody(ctx context.Context, body []byte) (endpoint
 		return &jsonrpcRenderer{err: NewError(CodeInvalidRequest, "invalid request")}, nil
 	}
 
+	if e.MaxBatchSize > 0 && len(reqs) > e.MaxBatchSize {
+		return &jsonrpcRenderer{err: NewError(CodeInvalidRequest, "batch size exceeds maximum")}, nil
+	}
+
 	responses := make([]response, 0, len(reqs))
 	for _, rawReq := range reqs {
 		var req request
@@ -228,7 +224,9 @@ func (e *JSONRPCEndpoint) handleBody(ctx context.Context, body []byte) (endpoint
 
 		// Notification: no id means no response expected.
 		if req.ID == nil {
-			e.invokeMethod(ctx, req.Method, req.Params)
+			if _, err := e.invokeMethod(ctx, req.Method, req.Params); err != nil {
+				log.Printf("jsonrpc notification error: method=%s error=%v", req.Method, err)
+			}
 			continue
 		}
 
@@ -331,7 +329,6 @@ func parseMethod(receiver reflect.Value, method reflect.Method) (*rpcMethod, str
 	rpc.paramType = paramType
 	rpc.methodName = method.Name
 
-	paramNames := make([]string, 0)
 	paramFields := make([]int, 0)
 	for i := 0; i < paramType.NumField(); i++ {
 		field := paramType.Field(i)
@@ -343,18 +340,15 @@ func parseMethod(receiver reflect.Value, method reflect.Method) (*rpcMethod, str
 		}
 		jsonTag := field.Tag.Get("json")
 		if jsonTag == "" {
-			paramNames = append(paramNames, field.Name)
 			paramFields = append(paramFields, i)
 		} else {
 			name := strings.Split(jsonTag, ",")[0]
 			if name == "" || name == "-" {
 				continue
 			}
-			paramNames = append(paramNames, name)
 			paramFields = append(paramFields, i)
 		}
 	}
-	rpc.paramNames = paramNames
 	rpc.paramFields = paramFields
 
 	return rpc, rpc.methodName
@@ -373,13 +367,15 @@ func (e *JSONRPCEndpoint) invokeMethod(ctx context.Context, name string, params 
 }
 
 // mapError converts any error to a JSON-RPC error.
-// JSONRPCError types preserve their code; other errors become InternalError.
+// JSONRPCError types preserve their code; other errors become InternalError
+// with a generic message to avoid exposing internal details.
 func mapError(err error) interface{} {
 	if rpcErr, ok := err.(*JSONRPCError); ok {
 		return rpcErr
 	}
+	log.Printf("jsonrpc internal error: %v", err)
 	return &JSONRPCError{
 		Code:    CodeInternalError,
-		Message: err.Error(),
+		Message: "internal error",
 	}
 }
