@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/mnehpets/oneserve/endpoint"
@@ -328,6 +331,34 @@ func TestCustomErrorCodes(t *testing.T) {
 	}
 }
 
+func TestGenericErrorHidesInternalDetails(t *testing.T) {
+	e := NewEndpoint()
+	e.Register("test", &testMethods{})
+
+	body := `{"jsonrpc":"2.0","method":"test.FailGeneric","params":{},"id":1}`
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	serveRPC(e).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	errObj := resp["error"].(map[string]interface{})
+	if int(errObj["code"].(float64)) != CodeInternalError {
+		t.Errorf("got error code %v, want %d", errObj["code"], CodeInternalError)
+	}
+	if errObj["message"] != "internal error" {
+		t.Errorf("got message %v, want 'internal error'", errObj["message"])
+	}
+}
+
 func TestProcessorChainExecution(t *testing.T) {
 	executed := false
 	processor := endpoint.ProcessorFunc(func(w http.ResponseWriter, r *http.Request, next func(w http.ResponseWriter, r *http.Request) error) error {
@@ -454,6 +485,10 @@ func (m *testMethods) Echo(ctx context.Context, params EchoParams) (string, erro
 
 func (m *testMethods) Fail(ctx context.Context, params struct{}) (interface{}, error) {
 	return nil, &JSONRPCError{Code: -1000, Message: "custom error"}
+}
+
+func (m *testMethods) FailGeneric(ctx context.Context, params struct{}) (interface{}, error) {
+	return nil, errors.New("sensitive internal error details")
 }
 
 type notifyMethods struct {
@@ -594,8 +629,12 @@ func TestParamsConversion(t *testing.T) {
 		{
 			"MissingParam",
 			`{"jsonrpc":"2.0","method":"params.TakesMultiple","params":{"n":10,"p":{"name":"Alice","age":30},"items":[1,2,3]},"id":1}`,
-			nil,
-			true,
+			func(t *testing.T, resp map[string]interface{}) {
+				if resp["result"].(float64) != 46 {
+					t.Errorf("got result %v, want 46 (missing param has zero value)", resp["result"])
+				}
+			},
+			false,
 		},
 	}
 
@@ -876,5 +915,103 @@ func TestMultipleParamsNotRegistered(t *testing.T) {
 	errObj := resp["error"].(map[string]interface{})
 	if int(errObj["code"].(float64)) != CodeMethodNotFound {
 		t.Errorf("got error code %v, want %d (method not found)", errObj["code"], CodeMethodNotFound)
+	}
+}
+
+func TestBatchSizeLimit(t *testing.T) {
+	e := NewEndpoint()
+	e.MaxBatchSize = 3
+	e.Register("math", &mathMethods{})
+
+	tests := []struct {
+		name      string
+		batchSize int
+		wantErr   bool
+		errCode   int
+	}{
+		{"WithinLimit", 3, false, 0},
+		{"ExceedsLimit", 4, true, CodeInvalidRequest},
+		{"SingleRequest", 1, false, 0},
+		{"AtExactLimit", 3, false, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var body strings.Builder
+			body.WriteString("[")
+			for i := 0; i < tt.batchSize; i++ {
+				if i > 0 {
+					body.WriteString(",")
+				}
+				body.WriteString(fmt.Sprintf(`{"jsonrpc":"2.0","method":"math.Add","params":{"a":%d,"b":%d},"id":%d}`, i, i+1, i+1))
+			}
+			body.WriteString("]")
+
+			req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(body.String())))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			serveRPC(e).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("got status %d, want %d", rec.Code, http.StatusOK)
+			}
+
+			if tt.wantErr {
+				var resp map[string]interface{}
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("failed to parse response: %v", err)
+				}
+				if resp["error"] == nil {
+					t.Error("expected error for batch size exceeding limit")
+				} else {
+					errObj := resp["error"].(map[string]interface{})
+					if int(errObj["code"].(float64)) != tt.errCode {
+						t.Errorf("got error code %v, want %d", errObj["code"], tt.errCode)
+					}
+				}
+			} else {
+				var resp []map[string]interface{}
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("failed to parse response: %v", err)
+				}
+				if len(resp) != tt.batchSize {
+					t.Errorf("got %d responses, want %d", len(resp), tt.batchSize)
+				}
+			}
+		})
+	}
+}
+
+func TestBatchSizeUnlimited(t *testing.T) {
+	e := NewEndpoint()
+	e.MaxBatchSize = 0 // Unlimited
+	e.Register("math", &mathMethods{})
+
+	// Create a batch with 150 requests (more than default limit)
+	var body strings.Builder
+	body.WriteString("[")
+	for i := 0; i < 150; i++ {
+		if i > 0 {
+			body.WriteString(",")
+		}
+		body.WriteString(fmt.Sprintf(`{"jsonrpc":"2.0","method":"math.Add","params":{"a":%d,"b":%d},"id":%d}`, i, i+1, i+1))
+	}
+	body.WriteString("]")
+
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(body.String())))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	serveRPC(e).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp []map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if len(resp) != 150 {
+		t.Errorf("got %d responses, want 150", len(resp))
 	}
 }
