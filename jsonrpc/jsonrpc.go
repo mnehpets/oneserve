@@ -3,8 +3,10 @@ package jsonrpc
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 
 	"github.com/mnehpets/oneserve/endpoint"
@@ -18,120 +20,87 @@ const (
 	CodeInternalError  = -32603
 )
 
-// JSONRPCError represents a JSON-RPC 2.0 error response.
 type JSONRPCError struct {
 	Code    int         `json:"code"`
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
 
-// Error implements the error interface.
 func (e *JSONRPCError) Error() string {
 	return e.Message
 }
 
-// NewParseError creates a parse error (-32700).
-// Returned when invalid JSON was received by the server.
-func NewParseError(message string) *JSONRPCError {
-	return &JSONRPCError{Code: CodeParseError, Message: message}
-}
-
-// NewInvalidRequestError creates an invalid request error (-32600).
-// Returned when the JSON sent is not a valid Request object.
-func NewInvalidRequestError(message string) *JSONRPCError {
-	return &JSONRPCError{Code: CodeInvalidRequest, Message: message}
-}
-
-// NewMethodNotFoundError creates a method not found error (-32601).
-// Returned when the method does not exist or is not available.
-func NewMethodNotFoundError(message string) *JSONRPCError {
-	return &JSONRPCError{Code: CodeMethodNotFound, Message: message}
-}
-
-// NewInvalidParamsError creates an invalid params error (-32602).
-// Returned when invalid method parameter(s) are provided.
-func NewInvalidParamsError(message string) *JSONRPCError {
-	return &JSONRPCError{Code: CodeInvalidParams, Message: message}
-}
-
-// NewInternalError creates an internal error (-32603).
-// Returned for internal JSON-RPC errors.
-func NewInternalError(message string) *JSONRPCError {
-	return &JSONRPCError{Code: CodeInternalError, Message: message}
+func NewError(code int, message string) *JSONRPCError {
+	return &JSONRPCError{Code: code, Message: message}
 }
 
 // rpcMethod holds reflection data for a registered RPC method.
 type rpcMethod struct {
-	receiver   reflect.Value
-	method     reflect.Method
-	paramTypes []reflect.Type
-	hasContext bool
-	returnsVal bool
-	returnsErr bool
+	receiver    reflect.Value
+	method      reflect.Method
+	paramType   reflect.Type
+	paramNames  []string // JSON tag names for validation and named params
+	paramFields []int    // Field indices for positional params unmarshaling
+	methodName  string
 }
 
-// call invokes the method with the given context and parameters.
-// Panics are recovered and converted to InternalError.
 func (m *rpcMethod) call(ctx context.Context, params json.RawMessage) (result interface{}, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = NewInternalError("internal error")
+			log.Printf("jsonrpc panic: %v", r)
+			err = NewError(CodeInternalError, "internal error")
 		}
 	}()
 
-	// Build argument list: receiver is always first.
-	args := make([]reflect.Value, 0, 1+len(m.paramTypes))
+	args := make([]reflect.Value, 0, 2)
 	args = append(args, m.receiver)
+	args = append(args, reflect.ValueOf(ctx))
 
-	if m.hasContext {
-		args = append(args, reflect.ValueOf(ctx))
-	}
-
-	if len(m.paramTypes) > 0 {
+	if m.paramType != nil {
 		if params == nil {
-			params = json.RawMessage("[]")
+			params = json.RawMessage("null")
 		}
 
-		// Try to parse params as array first, then as single value.
-		// JSON-RPC allows: "params": [1, 2] or "params": {"a": 1}
+		param := reflect.New(m.paramType)
+
 		var paramList []json.RawMessage
-		if err := json.Unmarshal(params, &paramList); err != nil {
-			// Not an array - try as single value.
-			var singleParam json.RawMessage
-			if err2 := json.Unmarshal(params, &singleParam); err2 == nil {
-				paramList = []json.RawMessage{singleParam}
-			} else {
-				return nil, NewInvalidParamsError("invalid params")
+		if err := json.Unmarshal(params, &paramList); err == nil {
+			// Positional params: array elements map to struct fields by declaration order.
+			if len(paramList) != len(m.paramFields) {
+				return nil, NewError(CodeInvalidParams, "invalid number of params")
+			}
+			// Directly unmarshal each element into the corresponding struct field.
+			for i, rawElem := range paramList {
+				fieldIdx := m.paramFields[i]
+				field := param.Elem().Field(fieldIdx)
+				if err := json.Unmarshal(rawElem, field.Addr().Interface()); err != nil {
+					return nil, NewError(CodeInvalidParams, "invalid params")
+				}
+			}
+		} else {
+			// Named params: JSON object keys map to struct fields by json tags.
+			if err := json.Unmarshal(params, param.Interface()); err != nil {
+				return nil, NewError(CodeInvalidParams, "invalid params")
+			}
+			// Verify all required params are present in the JSON object.
+			var paramMap map[string]json.RawMessage
+			if err := json.Unmarshal(params, &paramMap); err == nil {
+				for _, name := range m.paramNames {
+					if _, ok := paramMap[name]; !ok {
+						return nil, NewError(CodeInvalidParams, "missing param: "+name)
+					}
+				}
 			}
 		}
-
-		if len(paramList) != len(m.paramTypes) {
-			return nil, NewInvalidParamsError("invalid number of params")
-		}
-
-		// Unmarshal each param to its expected type.
-		for i, rawParam := range paramList {
-			param := reflect.New(m.paramTypes[i])
-			if err := json.Unmarshal(rawParam, param.Interface()); err != nil {
-				return nil, NewInvalidParamsError("invalid param " + string(rune('0'+i)))
-			}
-			args = append(args, param.Elem())
-		}
+		args = append(args, param.Elem())
 	}
 
 	results := m.method.Func.Call(args)
 
-	var retResult interface{}
+	retResult := results[0].Interface()
 	var retErr error
-
-	// Extract return values based on method signature.
-	if m.returnsVal && len(results) > 0 {
-		retResult = results[0].Interface()
-	}
-	if m.returnsErr && len(results) > 0 {
-		if !results[len(results)-1].IsNil() {
-			retErr = results[len(results)-1].Interface().(error)
-		}
+	if !results[1].IsNil() {
+		retErr = results[1].Interface().(error)
 	}
 
 	return retResult, retErr
@@ -165,18 +134,23 @@ func (e *JSONRPCEndpoint) Register(namespace string, receiver interface{}) {
 			continue
 		}
 
-		name := method.Name
-		if namespace != "" {
-			name = namespace + "." + name
+		handler, methodName := parseMethod(val, method)
+		if handler == nil {
+			continue
 		}
 
-		handler := parseMethod(val, method)
-		// parseMethod returns nil for invalid signatures (e.g., 3+ return values)
-		if handler != nil {
-			e.mu.Lock()
-			e.methods[name] = handler
-			e.mu.Unlock()
+		name := methodName
+		if namespace != "" {
+			name = namespace + "." + methodName
 		}
+
+		e.mu.Lock()
+		if _, exists := e.methods[name]; exists {
+			e.mu.Unlock()
+			panic("jsonrpc: method name collision: " + name)
+		}
+		e.methods[name] = handler
+		e.mu.Unlock()
 	}
 }
 
@@ -195,6 +169,12 @@ func (e *JSONRPCEndpoint) Endpoint(w http.ResponseWriter, r *http.Request, param
 		return nil, endpoint.Error(http.StatusMethodNotAllowed, "JSON-RPC requires POST method", nil)
 	}
 
+	// Per JSON-RPC over HTTP spec, Content-Type must be application/json
+	contentType := r.Header.Get("Content-Type")
+	if contentType != "" && !strings.HasPrefix(contentType, "application/json") {
+		return nil, endpoint.Error(http.StatusUnsupportedMediaType, "Content-Type must be application/json", nil)
+	}
+
 	return e.handleBody(r.Context(), params.Body)
 }
 
@@ -203,10 +183,9 @@ func (e *JSONRPCEndpoint) handleBody(ctx context.Context, body []byte) (endpoint
 	var reqs []json.RawMessage
 	var single bool
 
-	// Peek at first byte to distinguish batch vs single request.
 	if len(body) > 0 && body[0] == '[' {
 		if err := json.Unmarshal(body, &reqs); err != nil {
-			return &jsonrpcRenderer{err: NewParseError("parse error")}, nil
+			return &jsonrpcRenderer{err: NewError(CodeParseError, "parse error")}, nil
 		}
 	} else {
 		reqs = []json.RawMessage{body}
@@ -214,7 +193,7 @@ func (e *JSONRPCEndpoint) handleBody(ctx context.Context, body []byte) (endpoint
 	}
 
 	if len(reqs) == 0 {
-		return &jsonrpcRenderer{err: NewInvalidRequestError("invalid request")}, nil
+		return &jsonrpcRenderer{err: NewError(CodeInvalidRequest, "invalid request")}, nil
 	}
 
 	responses := make([]response, 0, len(reqs))
@@ -223,7 +202,7 @@ func (e *JSONRPCEndpoint) handleBody(ctx context.Context, body []byte) (endpoint
 		if err := json.Unmarshal(rawReq, &req); err != nil {
 			responses = append(responses, response{
 				JSONRPC: "2.0",
-				Error:   NewParseError("parse error"),
+				Error:   NewError(CodeParseError, "parse error"),
 				ID:      nil,
 			})
 			continue
@@ -232,7 +211,7 @@ func (e *JSONRPCEndpoint) handleBody(ctx context.Context, body []byte) (endpoint
 		if req.JSONRPC != "2.0" {
 			responses = append(responses, response{
 				JSONRPC: "2.0",
-				Error:   NewInvalidRequestError("invalid request"),
+				Error:   NewError(CodeInvalidRequest, "invalid request"),
 				ID:      req.ID,
 			})
 			continue
@@ -241,7 +220,7 @@ func (e *JSONRPCEndpoint) handleBody(ctx context.Context, body []byte) (endpoint
 		if req.Method == "" {
 			responses = append(responses, response{
 				JSONRPC: "2.0",
-				Error:   NewInvalidRequestError("method required"),
+				Error:   NewError(CodeInvalidRequest, "method required"),
 				ID:      req.ID,
 			})
 			continue
@@ -321,77 +300,73 @@ func (r *jsonrpcRenderer) Render(w http.ResponseWriter, req *http.Request) error
 }
 
 // parseMethod extracts method signature information via reflection.
-// Valid signatures:
-//   - func(ctx context.Context, params...) (result, error)
-//   - func(ctx context.Context, params...) error
-//   - func(ctx context.Context, params...) result
-//   - func(params...) (result, error)
-//   - func(params...) error
-//   - func(params...) result
-//   - func(ctx context.Context)
-//   - func()
-//
+// Valid signature: func(ctx context.Context, params...) (result, error)
 // Returns nil for invalid signatures.
-func parseMethod(receiver reflect.Value, method reflect.Method) *rpcMethod {
+func parseMethod(receiver reflect.Value, method reflect.Method) (*rpcMethod, string) {
 	ft := method.Func.Type()
-	numIn := ft.NumIn()
 
-	// First parameter is always the receiver, skip it.
-	// Check if second parameter is context.Context.
-	hasContext := false
-	paramStart := 1
-	if numIn >= 2 && ft.In(1) == reflect.TypeOf((*context.Context)(nil)).Elem() {
-		hasContext = true
-		paramStart = 2
+	if ft.NumIn() != 3 {
+		return nil, ""
+	}
+	if ft.In(1) != reflect.TypeOf((*context.Context)(nil)).Elem() {
+		return nil, ""
+	}
+	if ft.NumOut() != 2 {
+		return nil, ""
+	}
+	if ft.Out(1) != reflect.TypeOf((*error)(nil)).Elem() {
+		return nil, ""
 	}
 
-	paramTypes := make([]reflect.Type, 0, numIn-paramStart)
-	for i := paramStart; i < numIn; i++ {
-		paramTypes = append(paramTypes, ft.In(i))
+	rpc := &rpcMethod{
+		receiver: receiver,
+		method:   method,
 	}
 
-	returnsVal := false
-	returnsErr := false
+	paramType := ft.In(2)
+	if paramType.Kind() != reflect.Struct {
+		return nil, ""
+	}
 
-	switch ft.NumOut() {
-	case 0:
-		// No return values - valid for notifications.
-	case 1:
-		if ft.Out(0) == reflect.TypeOf((*error)(nil)).Elem() {
-			returnsErr = true
+	rpc.paramType = paramType
+	rpc.methodName = method.Name
+
+	paramNames := make([]string, 0)
+	paramFields := make([]int, 0)
+	for i := 0; i < paramType.NumField(); i++ {
+		field := paramType.Field(i)
+		if field.Name == "_" {
+			if tag := field.Tag.Get("jsonrpc"); tag != "" {
+				rpc.methodName = tag
+			}
+			continue
+		}
+		jsonTag := field.Tag.Get("json")
+		if jsonTag == "" {
+			paramNames = append(paramNames, field.Name)
+			paramFields = append(paramFields, i)
 		} else {
-			returnsVal = true
+			name := strings.Split(jsonTag, ",")[0]
+			if name == "" || name == "-" {
+				continue
+			}
+			paramNames = append(paramNames, name)
+			paramFields = append(paramFields, i)
 		}
-	case 2:
-		// Two returns must be (result, error).
-		returnsVal = true
-		returnsErr = true
-		if ft.Out(1) != reflect.TypeOf((*error)(nil)).Elem() {
-			return nil
-		}
-	default:
-		// More than 2 return values is invalid.
-		return nil
 	}
+	rpc.paramNames = paramNames
+	rpc.paramFields = paramFields
 
-	return &rpcMethod{
-		receiver:   receiver,
-		method:     method,
-		paramTypes: paramTypes,
-		hasContext: hasContext,
-		returnsVal: returnsVal,
-		returnsErr: returnsErr,
-	}
+	return rpc, rpc.methodName
 }
 
-// invokeMethod looks up and calls a registered method by name.
 func (e *JSONRPCEndpoint) invokeMethod(ctx context.Context, name string, params json.RawMessage) (interface{}, error) {
 	e.mu.RLock()
 	method, ok := e.methods[name]
 	e.mu.RUnlock()
 
 	if !ok {
-		return nil, NewMethodNotFoundError("method not found: " + name)
+		return nil, NewError(CodeMethodNotFound, "method not found: "+name)
 	}
 
 	return method.call(ctx, params)

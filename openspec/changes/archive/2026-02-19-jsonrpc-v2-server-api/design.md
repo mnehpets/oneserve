@@ -60,8 +60,13 @@ Processors run before the endpoint function. The endpoint returns a `jsonrpcRend
 ```go
 type MathMethods struct{}
 
-func (m *MathMethods) Add(ctx context.Context, a, b int) (int, error) {
-    return a + b, nil
+type AddParams struct {
+    A int `json:"a"`
+    B int `json:"b"`
+}
+
+func (m *MathMethods) Add(ctx context.Context, params AddParams) (int, error) {
+    return params.A + params.B, nil
 }
 
 e.Register("math", &MathMethods{})

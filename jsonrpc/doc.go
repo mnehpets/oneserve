@@ -1,98 +1,78 @@
 // Package jsonrpc provides a JSON-RPC 2.0 server endpoint integrated with oneserve's processor chain.
 //
-// This package implements JSON-RPC 2.0 specification (https://www.jsonrpc.org/specification)
-// with support for single requests, batch requests, and notifications.
+// This package implements the JSON-RPC 2.0 specification (https://www.jsonrpc.org/specification)
+// and JSON-RPC over HTTP (https://www.simple-is-better.org/json-rpc/transport_http.html).
 //
 // # Basic Usage
 //
-// Create an endpoint and register methods:
+// Create an endpoint, register methods, and serve via HTTP:
+//
+//	e := jsonrpc.NewEndpoint()
+//	e.Register("math", &MathMethods{})
+//	http.Handle("/rpc", endpoint.Handler(e.Endpoint))
+//	http.ListenAndServe(":8080", nil)
+//
+// Methods are defined on a struct with a params type:
 //
 //	type MathMethods struct{}
 //
-//	func (m *MathMethods) Add(ctx context.Context, a, b int) (int, error) {
-//	    return a + b, nil
+//	type AddParams struct {
+//	    A int `json:"a"`
+//	    B int `json:"b"`
 //	}
 //
-//	func main() {
-//	    e := jsonrpc.NewEndpoint()
-//	    e.Register("math", &MathMethods{})
-//
-//	    http.Handle("/rpc", endpoint.Handler(e.Endpoint))
-//	    http.ListenAndServe(":8080", nil)
+//	func (m *MathMethods) Add(ctx context.Context, params AddParams) (int, error) {
+//	    return params.A + params.B, nil
 //	}
 //
-// # Method Registration Pattern
+// # Method Signatures
 //
-// Methods are registered by providing a struct with exported methods. The namespace
-// parameter determines the method name prefix:
+// Methods must have this signature:
 //
-//	e.Register("math", &MathMethods{})
-//	// Methods become: "math.Add", "math.Subtract", etc.
+//	func(ctx context.Context, params <StructType>) (result, error)
 //
-// Use an empty namespace for direct method names:
+// The params struct uses json tags to define parameter names. Use an empty
+// struct for methods with no parameters:
 //
-//	e.Register("", &Methods{})
-//	// Methods become: "Add", "Subtract", etc.
+//	func (m *Methods) Ping(ctx context.Context, params struct{}) (string, error)
 //
-// Method signatures must follow one of these patterns:
+// Methods support both positional (array) and named (object) parameters.
 //
-//	func(ctx context.Context, params...) (result, error)
-//	func(ctx context.Context, params...) error
-//	func(ctx context.Context, params...) result
-//	func(params...) (result, error)
-//	func(params...) error
-//	func(params...) result
+// # Namespaces
 //
-// # Processor Integration
+// The namespace prefixes method names. Use empty string for no prefix:
 //
-// Processors can be passed to endpoint.Handler for authentication, logging, and other
-// cross-cutting concerns:
+//	e.Register("math", &MathMethods{})  // -> "math.Add"
+//	e.Register("", &MathMethods{})      // -> "Add"
 //
-//	e := jsonrpc.NewEndpoint()
-//	e.Register("api", &APIMethods{})
-//	http.Handle("/rpc", endpoint.Handler(e.Endpoint, authProcessor, loggingProcessor))
+// # Method Name Override
 //
-// If any processor returns an error, the chain stops and an HTTP error response
-// is returned (not a JSON-RPC error).
+// Use a `_` field with a `jsonrpc` tag to override the method name:
+//
+//	type AddParams struct {
+//	    _ struct{} `jsonrpc:"add"`  // method name becomes lowercase "add"
+//	    A int `json:"a"`
+//	    B int `json:"b"`
+//	}
 //
 // # Error Handling
 //
 // Return JSONRPCError for protocol-level errors:
 //
-//	func (m *Methods) Divide(ctx context.Context, a, b int) (int, error) {
-//	    if b == 0 {
-//	        return 0, jsonrpc.NewInvalidParamsError("division by zero")
-//	    }
-//	    return a / b, nil
-//	}
+//	return 0, jsonrpc.NewError(jsonrpc.CodeInvalidParams, "division by zero")
 //
-// Any error returned from a method is mapped to a JSON-RPC error. JSONRPCError types
-// preserve their code; other errors default to InternalError (-32603).
+// Standard error codes are defined as constants:
+//   - CodeParseError (-32700)
+//   - CodeInvalidRequest (-32600)
+//   - CodeMethodNotFound (-32601)
+//   - CodeInvalidParams (-32602)
+//   - CodeInternalError (-32603)
 //
-// # Standard Error Codes
+// # Processor Integration
 //
-// The package defines standard JSON-RPC 2.0 error codes:
-//   - CodeParseError (-32700): Invalid JSON was received
-//   - CodeInvalidRequest (-32600): The JSON sent is not a valid Request object
-//   - CodeMethodNotFound (-32601): The method does not exist
-//   - CodeInvalidParams (-32602): Invalid method parameter(s)
-//   - CodeInternalError (-32603): Internal JSON-RPC error
+// Processors can be passed to endpoint.Handler for cross-cutting concerns:
 //
-// # Notifications
+//	http.Handle("/rpc", endpoint.Handler(e.Endpoint, authProcessor, loggingProcessor))
 //
-// Requests without an "id" field are treated as notifications. The server executes
-// the method but returns no response (HTTP 204 No Content):
-//
-//	{"jsonrpc":"2.0","method":"log","params":["message"]}
-//
-// # Batch Requests
-//
-// Multiple requests can be sent in a single HTTP call as a JSON array:
-//
-//	[
-//	  {"jsonrpc":"2.0","method":"add","params":[1,2],"id":1},
-//	  {"jsonrpc":"2.0","method":"add","params":[3,4],"id":2}
-//	]
-//
-// The response is an array of results in the same order.
+// Processor errors return HTTP error responses (not JSON-RPC errors).
 package jsonrpc

@@ -11,23 +11,28 @@ import (
 
 type MathMethods struct{}
 
-func (m *MathMethods) Add(ctx context.Context, a, b int) (int, error) {
-	return a + b, nil
+type MathParams struct {
+	A int `json:"a"`
+	B int `json:"b"`
 }
 
-func (m *MathMethods) Subtract(ctx context.Context, a, b int) (int, error) {
-	return a - b, nil
+func (m *MathMethods) Add(ctx context.Context, params MathParams) (int, error) {
+	return params.A + params.B, nil
 }
 
-func (m *MathMethods) Multiply(ctx context.Context, a, b int) (int, error) {
-	return a * b, nil
+func (m *MathMethods) Subtract(ctx context.Context, params MathParams) (int, error) {
+	return params.A - params.B, nil
 }
 
-func (m *MathMethods) Divide(ctx context.Context, a, b int) (int, error) {
-	if b == 0 {
-		return 0, jsonrpc.NewInvalidParamsError("division by zero")
+func (m *MathMethods) Multiply(ctx context.Context, params MathParams) (int, error) {
+	return params.A * params.B, nil
+}
+
+func (m *MathMethods) Divide(ctx context.Context, params MathParams) (int, error) {
+	if params.B == 0 {
+		return 0, jsonrpc.NewError(jsonrpc.CodeInvalidParams, "division by zero")
 	}
-	return a / b, nil
+	return params.A / params.B, nil
 }
 
 func main() {
@@ -37,7 +42,7 @@ func main() {
 	http.Handle("/rpc", endpoint.Handler(e.Endpoint))
 
 	log.Println("JSON-RPC server listening on :8080")
-	log.Println("Try: curl -X POST http://localhost:8080/rpc -d '{\"jsonrpc\":\"2.0\",\"method\":\"math.Add\",\"params\":[5,3],\"id\":1}'")
+	log.Println("Try: curl -X POST http://localhost:8080/rpc -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"math.Add\",\"params\":[5,3],\"id\":1}'")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatal(err)
 	}
