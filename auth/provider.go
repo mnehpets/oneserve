@@ -72,9 +72,22 @@ func (r *Registry) Get(id string) (*Provider, bool) {
 	return p, ok
 }
 
+// OIDCProviderOption configures the token verifier for an OIDC provider.
+type OIDCProviderOption func(*oidc.Config)
+
+// WithSkipIssuerCheck disables issuer validation in the token verifier.
+// Use this for providers that issue tokens with a per-tenant issuer (e.g.,
+// Microsoft via the /common endpoint), and perform your own issuer validation
+// in the result endpoint callback.
+func WithSkipIssuerCheck() OIDCProviderOption {
+	return func(c *oidc.Config) {
+		c.SkipIssuerCheck = true
+	}
+}
+
 // RegisterOIDCProvider creates and registers an OIDC provider.
 // This is a helper that performs discovery and setup.
-func (r *Registry) RegisterOIDCProvider(ctx context.Context, id, issuer, clientID, clientSecret string, scopes []string, redirectURL string) error {
+func (r *Registry) RegisterOIDCProvider(ctx context.Context, id, issuer, clientID, clientSecret string, scopes []string, redirectURL string, opts ...OIDCProviderOption) error {
 	provider, err := oidc.NewProvider(ctx, issuer)
 	if err != nil {
 		return fmt.Errorf("failed to query provider %q: %v", issuer, err)
@@ -88,8 +101,11 @@ func (r *Registry) RegisterOIDCProvider(ctx context.Context, id, issuer, clientI
 		Scopes:       scopes,
 	}
 
-	// Default verifier
-	verifier := provider.Verifier(&oidc.Config{ClientID: clientID})
+	verifierConfig := &oidc.Config{ClientID: clientID}
+	for _, opt := range opts {
+		opt(verifierConfig)
+	}
+	verifier := provider.Verifier(verifierConfig)
 
 	p := NewProvider(id, conf, provider, verifier)
 	r.Register(p)
