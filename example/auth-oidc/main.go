@@ -159,31 +159,33 @@ func main() {
 	// Register Microsoft
 	if clientID := os.Getenv("MICROSOFT_CLIENT_ID"); clientID != "" {
 		if clientSecret := os.Getenv("MICROSOFT_CLIENT_SECRET"); clientSecret != "" {
-			if tenantID := os.Getenv("MICROSOFT_TENANT_ID"); tenantID != "" {
-				// Microsoft's OIDC implementation is ummmm... different.
-				// The OIDC discovery document returned from the .well-known endpoint
-				// contains an issuer with a parameter "{tenantid}", which does not match
-				// the "common" path fragment that should be used when you want to allow
-				// both consumer and m365 accounts.
-				//
-				// A good discussion of the common OIDC pitfalls is here:
-				// https://zitadel.com/blog/the-broken-promise-of-oidc
-				//
-				// To work around this, we manually provide the issuer URL in the context
-				ctx := oidc.InsecureIssuerURLContext(ctx, "https://login.microsoftonline.com/"+tenantID+"/v2.0")
-				err = registry.RegisterOIDCProvider(ctx,
-					"microsoft",
-					"https://login.microsoftonline.com/common/v2.0",
-					clientID,
-					clientSecret,
-					[]string{oidc.ScopeOpenID, "profile", "email"},
-					baseURL+"/auth/callback/microsoft",
-				)
-				if err != nil {
-					log.Printf("Failed to register Microsoft provider: %v", err)
-				} else {
-					log.Println("Registered Microsoft provider")
-				}
+			// Microsoft's OIDC discovery document at /common returns an issuer with the
+			// literal placeholder "{tenantid}" rather than a real value. go-oidc's
+			// discovery check would fail because that placeholder doesn't match the
+			// /common URL we used. InsecureIssuerURLContext bypasses that check.
+			//
+			// For multi-tenant support, tokens from any Azure AD tenant are accepted.
+			// Each token carries a per-tenant issuer such as:
+			//   https://login.microsoftonline.com/<tenant-uuid>/v2.0
+			// We skip the library's issuer check and validate the pattern ourselves
+			// in the result callback below.
+			//
+			// A good discussion of the common OIDC pitfalls is here:
+			// https://zitadel.com/blog/the-broken-promise-of-oidc
+			ctx := oidc.InsecureIssuerURLContext(ctx, "https://login.microsoftonline.com/common/v2.0")
+			err = registry.RegisterOIDCProvider(ctx,
+				"microsoft",
+				"https://login.microsoftonline.com/common/v2.0",
+				clientID,
+				clientSecret,
+				[]string{oidc.ScopeOpenID, "profile", "email"},
+				baseURL+"/auth/callback/microsoft",
+				auth.WithSkipIssuerCheck(),
+			)
+			if err != nil {
+				log.Printf("Failed to register Microsoft provider: %v", err)
+			} else {
+				log.Println("Registered Microsoft provider")
 			}
 		}
 	}
@@ -225,6 +227,25 @@ func main() {
 
 			// For OIDC providers, we can get email from ID Token
 			if params.IDToken != nil {
+				// For Microsoft multi-tenant, we skipped the library's issuer check.
+				// Per the Microsoft identity platform spec, the iss claim must equal
+				// https://login.microsoftonline.com/{tid}/v2.0 where tid is the tenant
+				// ID claim in the same token. We reconstruct the expected issuer from
+				// tid and do an exact match, which also validates cross-claim consistency.
+				// See: https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference
+				if params.ProviderID == "microsoft" {
+					var tidClaims struct {
+						TenantID string `json:"tid"`
+					}
+					if err := params.IDToken.Claims(&tidClaims); err != nil || tidClaims.TenantID == "" {
+						return nil, endpoint.Error(http.StatusUnauthorized, "missing tid claim in token", nil)
+					}
+					expectedIssuer := "https://login.microsoftonline.com/" + tidClaims.TenantID + "/v2.0"
+					if params.IDToken.Issuer != expectedIssuer {
+						return nil, endpoint.Error(http.StatusUnauthorized, "token issuer does not match tid claim", nil)
+					}
+				}
+
 				email, verified = auth.GetVerifiedEmail(params.IDToken)
 				// Quirk: Microsoft sometimes does not set email_verified even when it is verified
 				// Instead, we'll check for the preferred_username claim
